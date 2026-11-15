@@ -46,6 +46,10 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
 
   private async processJob(job: Job<{ jobId: string; documentId: string }>) {
     const { jobId, documentId } = job.data;
+    // BullMQ increments attemptsStarted on every delivery, including stalled-job recovery,
+    // while attemptsMade only counts completed failures. Use the former so a worker crash
+    // does not leave the database row stuck in PROCESSING.
+    const attempt = job.attemptsStarted || job.attemptsMade + 1;
     return tracer.startActiveSpan("document.process", {
       attributes: {
         "messaging.system": "bullmq",
@@ -54,13 +58,13 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
         "docuflow.job.id": jobId,
         "docuflow.document.id": documentId,
         "docuflow.worker.id": workerId,
-        "docuflow.job.attempt": job.attemptsMade + 1,
+        "docuflow.job.attempt": attempt,
       },
     }, async (span) => {
       const startedAt = Date.now();
-      logger.info("job.received", { workerId, jobId, documentId, attempt: job.attemptsMade + 1 });
+      logger.info("job.received", { workerId, jobId, documentId, attempt });
       try {
-        await this.executeJob(job, startedAt);
+        await this.executeJob(job, startedAt, attempt);
         span.setStatus({ code: SpanStatusCode.OK });
       } catch (error) {
         span.recordException(error instanceof Error ? error : String(error));
@@ -72,25 +76,26 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
     });
   }
 
-  private async executeJob(job: Job<{ jobId: string; documentId: string }>, startedAt: number) {
+  private async executeJob(job: Job<{ jobId: string; documentId: string }>, startedAt: number, attempt: number) {
     const { jobId, documentId } = job.data;
     const processing = await this.prisma.processingJob.updateMany({
-      where: {
-        id: jobId,
-        status: { in: ["QUEUED", "PROCESSING"] },
-        attempts: job.attemptsMade,
-      },
-      data: { status: "PROCESSING", attempts: job.attemptsMade + 1 },
+      where: { id: jobId, status: { in: ["QUEUED", "PROCESSING"] }, attempts: { lt: attempt } },
+      data: { status: "PROCESSING", attempts: attempt },
     });
     if (processing.count === 0) {
-      logger.debug("job.skipped", { workerId, jobId, documentId, reason: "not claimable" });
+      logger.debug("job.skipped", { workerId, jobId, documentId, attempt, reason: "not claimable" });
       return;
     }
     try {
       await this.prisma.document.update({ where: { id: documentId }, data: { status: "PROCESSING" } });
       const document = await this.prisma.document.findUniqueOrThrow({ where: { id: documentId } });
       const extraction = await processDocument({ storageKey: document.storageKey, mimeType: document.mimeType, filename: document.filename });
-      await this.prisma.$transaction(async (tx) => {
+      const completed = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.processingJob.updateMany({
+          where: { id: jobId, status: "PROCESSING", attempts: attempt },
+          data: { status: "COMPLETED", errorCode: null, errorMessage: null },
+        });
+        if (claimed.count === 0) return false;
         await tx.extractionResult.upsert({
           where: { jobId },
           create: {
@@ -112,12 +117,13 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
           create: { organizationId: document.organizationId, jobId, inputTokens: extraction.inputTokens, outputTokens: extraction.outputTokens, processingDuration: Date.now() - startedAt },
           update: { inputTokens: extraction.inputTokens, outputTokens: extraction.outputTokens, processingDuration: Date.now() - startedAt },
         });
-        await tx.processingJob.updateMany({
-          where: { id: jobId, status: "PROCESSING" },
-          data: { status: "COMPLETED", errorCode: null, errorMessage: null },
-        });
         await tx.document.update({ where: { id: documentId }, data: { status: "COMPLETED" } });
+        return true;
       });
+      if (!completed) {
+        logger.warn("job.completed_stale", { workerId, jobId, documentId, attempt });
+        return;
+      }
       logger.info("job.completed", {
         workerId,
         jobId,
@@ -131,20 +137,25 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
       await enqueueWebhookEvents(this.prisma, this.webhookQueue, document.organizationId, "document.processing.completed", { documentId: document.id, jobId, status: "COMPLETED" })
         .catch((error: unknown) => logger.warn("webhook.enqueue.failed", { jobId, organizationId: document.organizationId, ...errorFields(error) }));
     } catch (error) {
-      const attempt = job.attemptsMade + 1;
       if (attempt >= (job.opts.attempts ?? 1)) {
         const message = error instanceof Error ? error.message : "Processing failed";
         const errorCode = error instanceof ProcessingError ? error.code : "PROCESSING_FAILED";
-        await this.prisma.$transaction(async (tx) => {
-          await tx.processingJob.updateMany({
-            where: { id: jobId, status: "PROCESSING" },
+        const failed = await this.prisma.$transaction(async (tx) => {
+          const claimed = await tx.processingJob.updateMany({
+            where: { id: jobId, status: "PROCESSING", attempts: attempt },
             data: { status: "FAILED", errorCode, errorMessage: message.slice(0, 1000) },
           });
+          if (claimed.count === 0) return false;
           await tx.document.updateMany({
             where: { id: documentId, status: { in: ["QUEUED", "PROCESSING"] } },
             data: { status: "FAILED" },
           });
+          return true;
         });
+        if (!failed) {
+          logger.warn("job.failed_stale", { workerId, jobId, documentId, attempt, ...errorFields(error) });
+          throw error;
+        }
         await this.failedQueue.add("failed-document", { jobId, documentId, error: message }, { jobId: `${jobId}-${Date.now()}`, removeOnComplete: false });
         logger.error("job.terminally_failed", {
           workerId,

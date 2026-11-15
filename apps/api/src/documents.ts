@@ -179,27 +179,38 @@ export class DocumentsService {
     return this.enqueueDocument(document);
   }
 
-  private async enqueueDocument(document: { id: string; organizationId: string; status: DocumentStatus }) {
-    const existing = await this.prisma.processingJob.findFirst({ where: { documentId: document.id }, orderBy: { createdAt: "desc" } });
-    if (existing && (existing.status === "QUEUED" || existing.status === "PROCESSING" || existing.status === "COMPLETED")) return existing;
-    if (document.status === DocumentStatus.PENDING_UPLOAD) throw new BadRequestException("Complete the document upload before processing");
-    if (existing?.status === "FAILED") return this.retryExistingJob(existing);
+  private async enqueueDocument(document: { id: string; organizationId: string }) {
+    // Serialize job creation per document so concurrent /process calls cannot
+    // create duplicate billable jobs. The advisory lock is released at commit,
+    // before the queue write, which is safe because the job row already exists.
+    const outcome = await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${document.id}))`;
+      const current = await tx.document.findUniqueOrThrow({ where: { id: document.id }, select: { status: true } });
+      const existing = await tx.processingJob.findFirst({ where: { documentId: document.id }, orderBy: { createdAt: "desc" } });
+      if (existing && (existing.status === "QUEUED" || existing.status === "PROCESSING" || existing.status === "COMPLETED")) {
+        return { action: "existing" as const, job: existing };
+      }
+      if (current.status === DocumentStatus.PENDING_UPLOAD) throw new BadRequestException("Complete the document upload before processing");
+      if (existing?.status === "FAILED") return { action: "retry" as const, job: existing };
 
-    const job = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.processingJob.create({ data: { documentId: document.id } });
+      const job = await tx.processingJob.create({ data: { documentId: document.id } });
       await tx.document.update({ where: { id: document.id }, data: { status: DocumentStatus.QUEUED } });
-      return created;
+      return { action: "created" as const, job };
     });
+
+    if (outcome.action === "existing") return outcome.job;
+    if (outcome.action === "retry") return this.retryExistingJob(outcome.job);
+
     try {
-      await this.queue.add("process-document", { jobId: job.id, documentId: document.id }, { jobId: job.id, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+      await this.queue.add("process-document", { jobId: outcome.job.id, documentId: document.id }, { jobId: outcome.job.id, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
     } catch {
       await this.prisma.$transaction(async (tx) => {
-        await tx.processingJob.update({ where: { id: job.id }, data: { status: "FAILED", errorCode: "QUEUE_UNAVAILABLE", errorMessage: "Could not enqueue document processing" } });
+        await tx.processingJob.update({ where: { id: outcome.job.id }, data: { status: "FAILED", errorCode: "QUEUE_UNAVAILABLE", errorMessage: "Could not enqueue document processing" } });
         await tx.document.update({ where: { id: document.id }, data: { status: DocumentStatus.FAILED } });
       });
       throw new ServiceUnavailableException("Could not queue document processing");
     }
-    return job;
+    return this.prisma.processingJob.findUniqueOrThrow({ where: { id: outcome.job.id } });
   }
 
   private async retryExistingJob(job: { id: string; documentId: string }) {
@@ -234,8 +245,9 @@ export class DocumentsService {
     return document;
   }
 
-  private publicDocument<T extends { size: bigint }>(document: T) {
-    return { ...document, size: Number(document.size) };
+  private publicDocument<T extends { size: bigint; storageKey: string }>(document: T) {
+    const { storageKey: _storageKey, ...metadata } = document;
+    return { ...metadata, size: Number(document.size) };
   }
 
   private cloudinaryConfig() {

@@ -1,6 +1,7 @@
 import { createCipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { MembershipRole, PrismaClient } from "@prisma/client";
+import { isSafeWebhookUrl } from "@docuflow/shared";
 
 const keyPrefixLength = 16;
 
@@ -81,7 +82,7 @@ export class DeveloperService {
     await this.requireDeveloperRole(userId, organizationId);
     const url = typeof input.url === "string" ? input.url.trim() : "";
     const events = input.events;
-    if (!this.isSafeWebhookUrl(url)) throw new BadRequestException("Webhook URL must be HTTPS and must not target a local or private address");
+    if (!(await isSafeWebhookUrl(url, { resolveDns: process.env.NODE_ENV === "production" }))) throw new BadRequestException("Webhook URL must be HTTPS and must not target a local or private address");
     const allowedEvents = ["document.processing.completed", "document.processing.failed"];
     if (!Array.isArray(events) || events.length === 0 || events.some((event) => typeof event !== "string" || !allowedEvents.includes(event))) {
       throw new BadRequestException(`events must contain one or more of: ${allowedEvents.join(", ")}`);
@@ -111,29 +112,25 @@ export class DeveloperService {
   }
 
   private async requireMembership(userId: string, organizationId: string) {
-    if (!organizationId || !await this.prisma.membership.findUnique({ where: { userId_organizationId: { userId, organizationId } }, select: { id: true } })) throw new NotFoundException("Organization not found");
+    this.requireOrganizationScope(organizationId);
+    if (!await this.prisma.membership.findUnique({ where: { userId_organizationId: { userId, organizationId } }, select: { id: true } })) throw new NotFoundException("Organization not found");
   }
 
   private async requireDeveloperRole(userId: string, organizationId: string) {
+    this.requireOrganizationScope(organizationId);
     const membership = await this.prisma.membership.findUnique({ where: { userId_organizationId: { userId, organizationId } }, select: { role: true } });
     if (!membership) throw new NotFoundException("Organization not found");
     if (![MembershipRole.OWNER, MembershipRole.ADMIN, MembershipRole.DEVELOPER].some((role) => role === membership.role)) throw new ForbiddenException("Only owners, admins, and developers can manage integrations");
+  }
+
+  private requireOrganizationScope(organizationId: string) {
+    if (!organizationId) throw new BadRequestException("organizationId or the x-organization-id header is required");
   }
 
   private parseDate(value: unknown, name: string) {
     if (value === undefined) return undefined;
     if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) throw new BadRequestException(`${name} must be a valid ISO date`);
     return new Date(value);
-  }
-
-  private isSafeWebhookUrl(value: string) {
-    try {
-      const url = new URL(value);
-      const hostname = url.hostname.toLowerCase();
-      if (url.protocol !== "https:" || url.username || url.password || hostname === "localhost" || hostname.endsWith(".local")) return false;
-      if (/^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(hostname) || hostname === "::1" || hostname.startsWith("fc") || hostname.startsWith("fd")) return false;
-      return true;
-    } catch { return false; }
   }
 
   private hash(value: string) { return createHash("sha256").update(value).digest("hex"); }

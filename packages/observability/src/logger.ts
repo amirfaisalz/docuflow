@@ -22,6 +22,8 @@ export interface LoggerOptions {
 
 const levelRank: Record<LogLevel, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 const sensitiveKey = /(secret|token|password|authorization|api[-_]?key|signing[-_]?secret|key[-_]?hash|credential)/i;
+// Token *counts* are safe operational metrics, unlike credentials whose names also contain "token".
+const safeMetricKeys = new Set(["inputTokens", "outputTokens", "tokenCount", "promptTokenCount", "candidatesTokenCount", "maxTokens"]);
 const maxDepth = 6;
 
 function normalizeLevel(value: string | undefined): LogLevel {
@@ -37,7 +39,9 @@ function redact(value: unknown, depth = 0): unknown {
   if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
   if (Array.isArray(value)) return value.map((item) => redact(item, depth + 1));
   const result: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value)) result[key] = sensitiveKey.test(key) ? "[REDACTED]" : redact(item, depth + 1);
+  for (const [key, item] of Object.entries(value)) {
+    result[key] = !safeMetricKeys.has(key) && sensitiveKey.test(key) ? "[REDACTED]" : redact(item, depth + 1);
+  }
   return result;
 }
 

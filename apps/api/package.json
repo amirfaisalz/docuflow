@@ -7,12 +7,13 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "pretest": "pnpm --filter @docuflow/observability build",
+    "pretest": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build",
     "test": "PROCESSING_QUEUE_NAME=${PROCESSING_QUEUE_NAME:-docuflow-api-test} JWT_SECRET=${JWT_SECRET:-docuflow-local-test-secret-change-me-32chars} DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/docuflow?schema=public} tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@docuflow/database": "workspace:*",
     "@docuflow/observability": "workspace:*",
+    "@docuflow/shared": "workspace:*",
     "@nestjs/common": "^11.1.9",
     "@nestjs/core": "^11.1.9",
     "@nestjs/platform-express": "^11.1.9",

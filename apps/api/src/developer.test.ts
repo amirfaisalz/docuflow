@@ -81,6 +81,34 @@ test("API keys are only returned once, authenticate tenant APIs, and can be revo
   assert.equal(denied.status, 401);
 });
 
+test("key management requires an explicit organization scope", async () => {
+  const listed = await request("/api-keys", { token: accessToken });
+  assert.equal(listed.status, 400);
+  const revoked = await request(`/api-keys/00000000-0000-0000-0000-000000000000`, { method: "DELETE", token: accessToken });
+  assert.equal(revoked.status, 400);
+  const webhooks = await request("/webhooks", { token: accessToken });
+  assert.equal(webhooks.status, 400);
+});
+
+test("concurrent processing requests create exactly one job", async () => {
+  const created = await request("/api-keys", { method: "POST", token: accessToken, body: { organizationId, name: "Concurrency key" } });
+  assert.equal(created.status, 201);
+  const key = await created.json() as { secret: string };
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const document = await prisma.document.create({
+    data: { organizationId, filename: "concurrent.pdf", mimeType: "application/pdf", size: 12n, storageKey: `concurrency-test/${suffix}.pdf`, status: "UPLOADED" },
+  });
+
+  const responses = await Promise.all(Array.from({ length: 8 }, () => request(`/documents/${document.id}/process`, { method: "POST", token: key.secret, body: {} })));
+  assert.ok(responses.every((response) => response.status === 202), responses.map((response) => response.status).join(","));
+  const jobs = await Promise.all(responses.map(async (response) => await response.json() as { id: string }));
+  assert.equal(new Set(jobs.map(({ id }) => id)).size, 1);
+  assert.equal(await prisma.processingJob.count({ where: { documentId: document.id } }), 1);
+
+  const queued = await queue.getJobs(["waiting"]);
+  for (const job of queued.filter(({ data }) => data.documentId === document.id)) await job.remove();
+});
+
 test("usage summary is tenant scoped and webhooks protect endpoint secrets", async () => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const document = await prisma.document.create({ data: { organizationId, filename: "usage.pdf", mimeType: "application/pdf", size: 12n, storageKey: `usage-test/${suffix}.pdf` } });

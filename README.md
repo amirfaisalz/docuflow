@@ -56,8 +56,9 @@ The following features represent the intended product scope. Implementation stat
 | API keys          | Programmatic access for developers        | Implemented |
 | Usage metering    | Track processing and API consumption      | Implemented |
 | Webhooks          | Notify external systems about job results | Implemented |
-| Observability     | Logs, metrics, and distributed tracing    | Implemented |
+| Observability     | Structured logs, tracing, and readiness probes | Implemented |
 | Infrastructure    | Containerized AWS deployment              | Implemented |
+| Web dashboard     | Upload, review, and usage UI              | Planned |
 
 ---
 
@@ -86,7 +87,8 @@ The project uses a TypeScript-first architecture with dedicated services for the
 - **PostgreSQL:** Primary relational database.
 - **Redis:** Queue infrastructure and temporary processing state.
 - **BullMQ:** Background job processing.
-- **AWS S3:** Document object storage.
+- **Cloudinary:** Private document object storage.
+- **AWS S3:** Provisioned by Terraform for future artifact storage; not used by the current pipeline.
 - **Docker:** Containerization.
 - **AWS ECS Fargate:** Container deployment.
 - **Terraform:** Infrastructure as code.
@@ -102,7 +104,7 @@ The project uses a TypeScript-first architecture with dedicated services for the
 
 - **OpenTelemetry:** Distributed tracing and instrumentation.
 - **Structured logging:** Application and worker logs.
-- **Metrics:** Job duration, throughput, failure rates, and API latency.
+- **Metrics:** CloudWatch Container Insights and ALB metrics for latency, throughput, failures, and resource usage.
 - **Grafana:** Monitoring and visualization.
 
 ---
@@ -128,7 +130,7 @@ flowchart TB
 
     subgraph Storage
         DB[(PostgreSQL)]
-        S3[(AWS S3)]
+        Storage[(Cloudinary)]
         Redis[(Redis)]
     end
 
@@ -148,13 +150,13 @@ flowchart TB
     Web --> API
 
     API --> DB
-    API --> S3
+    API --> Storage
     API --> Redis
 
     Redis --> Queue
     Queue --> Worker
 
-    Worker --> S3
+    Worker --> Storage
     Worker --> OCR
     Worker --> LLM
     Worker --> DB
@@ -167,7 +169,7 @@ flowchart TB
 
 **1. Web Application**
 
-The frontend provides:
+The frontend currently serves a landing page. The planned dashboard will provide:
 
 - Authentication and organization management.
 - Document upload interface.
@@ -211,9 +213,9 @@ Stores application data, including organizations, users, documents, processing j
 
 Manages background job queues, concurrency, retries, and job scheduling.
 
-**6. AWS S3**
+**6. Cloudinary**
 
-Stores uploaded documents and generated artifacts. Documents should be accessed through authorized, time-limited URLs rather than public object access.
+Stores uploaded documents as authenticated assets. Documents are accessed through signed upload parameters and short-lived signed download URLs rather than public object access. Terraform also provisions an S3 bucket reserved for future artifact storage.
 
 ---
 
@@ -252,9 +254,9 @@ The API:
 2. Checks organization membership.
 3. Validates file type and size.
 4. Creates a document record.
-5. Generates a pre-signed S3 upload URL.
+5. Generates signed Cloudinary upload parameters.
 
-The client uploads the file directly to S3.
+The client uploads the file directly to Cloudinary.
 
 **Step 2: Job Creation**
 
@@ -434,8 +436,8 @@ API keys should:
 
 Security requirements include:
 
-- Private S3 buckets.
-- Pre-signed URLs with expiration.
+- Authenticated Cloudinary assets rather than public object access.
+- Signed upload parameters and short-lived signed download URLs.
 - File type and size validation.
 - File content verification.
 - Authorization checks for document access.
@@ -608,14 +610,12 @@ Base path:
 
 ### Authentication
 
-Authentication endpoints are public. Registration creates a user with a scrypt password hash; login issues a signed one-hour HS256 bearer token. Authenticated organization endpoints require `Authorization: Bearer <accessToken>`.
+Authentication endpoints are public. Registration creates a user with a scrypt password hash; login issues a signed one-hour HS256 bearer token. Tokens are stateless, so there is no server-side refresh or logout endpoint yet: log in again to obtain a new token after expiry. Authenticated organization endpoints require `Authorization: Bearer <accessToken>`.
 
 | Method | Endpoint         | Description     |
 | ------ | ---------------- | --------------- |
 | POST   | `/auth/register` | Register a user |
 | POST   | `/auth/login`    | Authenticate    |
-| POST   | `/auth/refresh`  | Refresh session |
-| POST   | `/auth/logout`   | End session     |
 
 ### Organizations
 
@@ -626,7 +626,6 @@ Organization list/create and membership list/add are tenant-scoped. The creator 
 | GET    | `/organizations`             | List organizations  |
 | POST   | `/organizations`             | Create organization |
 | GET    | `/organizations/:id`         | Get organization    |
-| GET    | `/organizations/:id/members` | List members        |
 | GET    | `/organizations/:id/members` | List members        |
 | POST   | `/organizations/:id/members` | Add member           |
 
@@ -688,7 +687,7 @@ Create a key with `POST /api/v1/api-keys`:
 }
 ```
 
-The response includes the one-time `secret` (`df_live_...`). Send it as `Authorization: Bearer df_live_...` to the programmatic document and job endpoints. Key management endpoints use the normal user access token. Plaintext secrets are never returned by list endpoints.
+The response includes the one-time `secret` (`df_live_...`). Send it as `Authorization: Bearer df_live_...` to the programmatic document and job endpoints. Key management endpoints use the normal user access token plus an explicit organization scope: send `x-organization-id` for list/revoke, or `organizationId` in the create body. Requests without an organization scope return `400`. Plaintext secrets are never returned by list endpoints.
 
 `GET /api/v1/usage` accepts optional `from` and `to` ISO timestamps. User-token requests select the organization with `x-organization-id`; API-key requests are scoped to the key's organization. The response aggregates successful processing operations, LLM input/output tokens, processing duration, and recent usage records.
 
@@ -957,7 +956,7 @@ Install the following tools:
 - Docker Compose
 - Git
 
-External credentials will be needed for AWS and the selected AI provider when those integrations are implemented.
+External credentials are required for Cloudinary document storage and Gemini extraction; see the environment example below.
 
 ### Clone Repository
 
@@ -1180,9 +1179,10 @@ container health checks use the same probe.
 ### Metrics
 
 CloudWatch Container Insights and ALB metrics provide API latency, request
-counts, task CPU/memory, and unhealthy targets. Application-level counters such
-as queue waiting jobs and webhook failure counts can be derived from BullMQ and
-the delivery tables.
+counts, task CPU/memory, and unhealthy targets. The services also emit structured
+logs and OpenTelemetry traces. Application-level metrics such as queue waiting
+jobs and webhook failure counts can be derived from BullMQ and the delivery
+tables; dedicated counters are not emitted by the application yet.
 
 ---
 
@@ -1202,7 +1202,8 @@ flowchart TB
         Worker[ECS Worker Service]
         DB[(RDS PostgreSQL)]
         Redis[(ElastiCache Redis)]
-        S3[(S3 Bucket)]
+        Cloudinary[(Cloudinary)]
+        S3[(S3 Bucket - reserved)]
         Secrets[Secrets Manager]
     end
 
@@ -1213,11 +1214,11 @@ flowchart TB
 
     API --> DB
     API --> Redis
-    API --> S3
+    API --> Cloudinary
 
     Redis --> Worker
     Worker --> DB
-    Worker --> S3
+    Worker --> Cloudinary
 
     Web --> Secrets
     API --> Secrets
@@ -1233,7 +1234,8 @@ flowchart TB
 | Background workers   | ECS Fargate                                     |
 | Database             | RDS PostgreSQL                                  |
 | Queue infrastructure | ElastiCache Redis                               |
-| Document storage     | S3                                              |
+| Document storage     | Cloudinary                                      |
+| Artifact storage     | S3 bucket provisioned for future use            |
 | Container registry   | ECR                                             |
 | Secrets              | Secrets Manager                                 |
 | Networking           | VPC                                             |
@@ -1481,7 +1483,7 @@ The project prioritizes practical engineering trade-offs rather than unnecessary
 | NestJS for backend            | Modular architecture and dependency injection |
 | PostgreSQL                    | Relational data and transactional consistency |
 | Redis + BullMQ                | Reliable asynchronous job orchestration       |
-| S3 for documents              | Durable object storage                        |
+| Cloudinary for documents      | Managed authenticated document storage       |
 | LLM provider abstraction      | Avoid provider lock-in                        |
 | Turborepo                     | Shared packages and monorepo orchestration    |
 | Docker                        | Consistent local and production environments  |

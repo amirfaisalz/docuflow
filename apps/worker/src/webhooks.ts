@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes }
 import { Prisma, PrismaClient } from "@prisma/client";
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { createLogger } from "@docuflow/observability";
+import { isSafeWebhookUrl } from "@docuflow/shared";
 import { Queue, Worker } from "bullmq";
 import { createRedisConnection } from "./processing-queue";
 
@@ -55,6 +56,11 @@ export function createWebhookWorker(prisma: PrismaClient) {
       let responseStatus: number | null = null;
       let error: string | null = null;
       try {
+        // Re-check at delivery time (and resolve DNS in production) so a hostname
+        // that later points at a private address cannot reach internal services.
+        if (process.env.NODE_ENV === "production" && !(await isSafeWebhookUrl(delivery.endpoint.url, { resolveDns: true }))) {
+          throw new Error("Webhook URL resolves to a disallowed address");
+        }
         const secret = decryptSecret(delivery.endpoint.encryptedSigningSecret);
         const body = JSON.stringify(delivery.payload);
         const timestamp = Math.floor(Date.now() / 1000);

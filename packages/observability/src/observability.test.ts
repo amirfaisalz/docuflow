@@ -35,13 +35,19 @@ test("structured logger redacts credentials and serializes errors", () => {
     authorization: "Bearer secret-token",
     apiKey: "df_live_example",
     signingSecret: "whsec_example",
+    accessToken: "jwt-value",
+    inputTokens: 420,
+    outputTokens: 37,
     nested: { password: "hunter2", safe: "visible" },
     error: new Error("boom"),
   });
-  const entry = lines[0].entry as { authorization: string; apiKey: string; signingSecret: string; nested: Record<string, unknown>; error: Record<string, unknown> };
+  const entry = lines[0].entry as { authorization: string; apiKey: string; signingSecret: string; accessToken: string; inputTokens: number; outputTokens: number; nested: Record<string, unknown>; error: Record<string, unknown> };
   assert.equal(entry.authorization, "[REDACTED]");
   assert.equal(entry.apiKey, "[REDACTED]");
   assert.equal(entry.signingSecret, "[REDACTED]");
+  assert.equal(entry.accessToken, "[REDACTED]");
+  assert.equal(entry.inputTokens, 420);
+  assert.equal(entry.outputTokens, 37);
   assert.deepEqual(entry.nested, { password: "[REDACTED]", safe: "visible" });
   assert.equal(entry.error.message, "boom");
   assert.equal(entry.error.name, "Error");

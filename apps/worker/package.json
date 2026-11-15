@@ -7,12 +7,12 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "pretest": "pnpm --filter @docuflow/observability build",
+    "pretest": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build",
     "test": "PROCESSING_QUEUE_NAME=${PROCESSING_QUEUE_NAME:-docuflow-worker-test} tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@docuflow/observability": "workspace:*",
-    "@google/genai": "^3.3.0",
+    "@docuflow/shared": "workspace:*",
     "@nestjs/common": "^11.1.9",
     "@nestjs/core": "^11.1.9",
     "@nestjs/platform-express": "^11.1.9",
@@ -21,7 +21,6 @@
     "bullmq": "^6.7.6",
     "cloudinary": "^2.11.0",
     "ioredis": "^6.0.0",
-    "pdf-parse": "^2.4.5",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2",
     "zod": "^4.6.7"

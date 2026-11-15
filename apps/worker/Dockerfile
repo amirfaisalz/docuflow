@@ -17,6 +17,7 @@ FROM dependencies AS build
 COPY . .
 RUN pnpm --filter @docuflow/database build \
   && pnpm --filter @docuflow/observability build \
+  && pnpm --filter @docuflow/shared build \
   && pnpm --filter @docuflow/worker build
 
 FROM base AS runner

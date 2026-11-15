@@ -12,7 +12,7 @@ export class HealthService implements OnApplicationShutdown {
     enableOfflineQueue: false,
     connectTimeout: 2000,
     maxRetriesPerRequest: 1,
-    retryStrategy: () => null,
+    retryStrategy: (attempt) => attempt > 3 ? null : Math.min(attempt * 200, 1000),
   });
 
   constructor(@Inject(PrismaClient) private readonly prisma: PrismaClient) {
@@ -29,7 +29,7 @@ export class HealthService implements OnApplicationShutdown {
       {
         name: "redis",
         check: async () => {
-          if (this.redis.status === "wait") await this.redis.connect();
+          if (this.redis.status === "wait" || this.redis.status === "end") await this.redis.connect();
           if ((await this.redis.ping()) !== "PONG") throw new Error("Redis ping failed");
         },
       },

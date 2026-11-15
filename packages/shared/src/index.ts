@@ -5,3 +5,5 @@ export interface HealthResponse {
   status: "ok";
   service: ServiceName;
 }
+
+export { isBlockedAddress, isSafeWebhookUrl, type WebhookUrlOptions } from "./url-safety";
