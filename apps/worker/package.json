@@ -7,13 +7,16 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "pnpm --filter @docuflow/observability build",
     "test": "PROCESSING_QUEUE_NAME=${PROCESSING_QUEUE_NAME:-docuflow-worker-test} tsx --test src/**/*.test.ts"
   },
   "dependencies": {
+    "@docuflow/observability": "workspace:*",
     "@google/genai": "^3.3.0",
     "@nestjs/common": "^11.1.9",
     "@nestjs/core": "^11.1.9",
     "@nestjs/platform-express": "^11.1.9",
+    "@opentelemetry/api": "^1.10.0",
     "@prisma/client": "^6.19.0",
     "bullmq": "^6.7.6",
     "cloudinary": "^2.11.0",

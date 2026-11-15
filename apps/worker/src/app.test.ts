@@ -93,6 +93,12 @@ test("GET /health reports worker service health", async () => {
   assert.deepEqual(await response.json(), { status: "ok", service: "worker" });
 });
 
+test("GET /health/ready verifies worker dependencies", async () => {
+  const ready = await fetch(`${baseUrl}/health/ready`);
+  assert.equal(ready.status, 200);
+  assert.deepEqual(await ready.json(), { status: "ok", checks: { database: "up", redis: "up" }, service: "worker" });
+});
+
 test("processing worker executes a queued job once and updates persistent status", async () => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const organization = await prisma.organization.create({ data: { name: `Worker ${suffix}`, slug: `worker-${suffix}` } });

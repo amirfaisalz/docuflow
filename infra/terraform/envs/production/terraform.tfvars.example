@@ -1,0 +1,14 @@
+# Copy this file to terraform.tfvars and replace the placeholder values.
+# Never commit terraform.tfvars or Terraform state files.
+aws_region   = "ap-southeast-1"
+project_name = "docuflow"
+image_tag    = "latest"
+
+# Optional: set an ACM certificate ARN to enable HTTPS on the ALB.
+# certificate_arn = "arn:aws:acm:ap-southeast-1:123456789012:certificate/..."
+api_host = "api.docuflow.example.com"
+
+gemini_api_key       = "replace-me"
+cloudinary_cloud_name = "replace-me"
+cloudinary_api_key    = "replace-me"
+cloudinary_api_secret = "replace-me"

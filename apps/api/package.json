@@ -7,13 +7,16 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "pnpm --filter @docuflow/observability build",
     "test": "PROCESSING_QUEUE_NAME=${PROCESSING_QUEUE_NAME:-docuflow-api-test} JWT_SECRET=${JWT_SECRET:-docuflow-local-test-secret-change-me-32chars} DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/docuflow?schema=public} tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@docuflow/database": "workspace:*",
+    "@docuflow/observability": "workspace:*",
     "@nestjs/common": "^11.1.9",
     "@nestjs/core": "^11.1.9",
     "@nestjs/platform-express": "^11.1.9",
+    "@opentelemetry/api": "^1.10.0",
     "@prisma/client": "^6.19.0",
     "bullmq": "^6.7.6",
     "ioredis": "^6.0.0",

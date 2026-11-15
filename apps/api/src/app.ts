@@ -1,17 +1,33 @@
 import "reflect-metadata";
-import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Injectable, Module, OnApplicationShutdown, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Injectable, Module, OnApplicationShutdown, Param, Post, Query, Res } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { PrismaClient } from "@prisma/client";
 import { AuthTenancyService } from "./auth-tenancy";
 import { DocumentsService } from "./documents";
 import { createProcessingQueue } from "./processing-queue";
 import { DeveloperService } from "./developer";
+import { HealthService } from "./health";
+import { requestObservability } from "./observability";
 
 @Controller("health")
 class HealthController {
+  constructor(@Inject(HealthService) private readonly health: HealthService) {}
+
   @Get()
-  health() {
-    return { status: "ok", service: "api" };
+  live() {
+    return this.health.live();
+  }
+
+  @Get("live")
+  liveness() {
+    return this.health.live();
+  }
+
+  @Get("ready")
+  async readiness(@Res({ passthrough: true }) response: { status(code: number): void }) {
+    const report = await this.health.ready();
+    if (report.status !== "ok") response.status(503);
+    return { ...report, service: "api" };
   }
 }
 
@@ -170,6 +186,7 @@ class ProcessingQueueLifecycle implements OnApplicationShutdown {
     AuthTenancyService,
     DocumentsService,
     DeveloperService,
+    HealthService,
     { provide: "PROCESSING_QUEUE", useFactory: createProcessingQueue, inject: [] },
     ProcessingQueueLifecycle,
   ],
@@ -178,7 +195,9 @@ class ApiModule {}
 
 export async function createApiApp() {
   const app = await NestFactory.create(ApiModule, { logger: ["error"] });
+  app.use(requestObservability);
   app.enableShutdownHooks();
   app.get(ProcessingQueueLifecycle);
+  app.get(HealthService);
   return app;
 }

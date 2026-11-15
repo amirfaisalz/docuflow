@@ -23,3 +23,14 @@ test("GET /health reports API service health", async () => {
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), { status: "ok", service: "api" });
 });
+
+test("GET /health/live and /health/ready expose liveness and dependency readiness", async () => {
+  const live = await fetch(`${baseUrl}/health/live`);
+  assert.equal(live.status, 200);
+  assert.deepEqual(await live.json(), { status: "ok", service: "api" });
+  assert.ok(live.headers.get("x-request-id"));
+
+  const ready = await fetch(`${baseUrl}/health/ready`);
+  assert.equal(ready.status, 200);
+  assert.deepEqual(await ready.json(), { status: "ok", checks: { database: "up", redis: "up" }, service: "api" });
+});

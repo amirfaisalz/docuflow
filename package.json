@@ -5,15 +5,19 @@
   "packageManager": "pnpm@10.26.1",
   "scripts": {
     "dev": "turbo dev",
+    "predev": "pnpm --filter @docuflow/observability build",
     "build": "turbo build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "test": "turbo test --continue",
+    "test:e2e": "pnpm --filter @docuflow/observability build && TSX_TSCONFIG_PATH=tsconfig.e2e.json tsx --test tests/e2e/*.test.ts",
     "db:generate": "pnpm --filter @docuflow/database db:generate",
     "db:migrate": "pnpm --filter @docuflow/database db:migrate",
     "db:studio": "pnpm --filter @docuflow/database db:studio"
   },
   "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
     "turbo": "^2.5.8",
     "typescript": "^5.9.3"
   }

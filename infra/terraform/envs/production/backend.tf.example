@@ -1,0 +1,12 @@
+# Recommended remote state. Rename to backend.tf and run `terraform init -migrate-state`.
+# Create the bucket and DynamoDB lock table before enabling this block.
+#
+# terraform {
+#   backend "s3" {
+#     bucket         = "docuflow-terraform-state"
+#     key            = "production/terraform.tfstate"
+#     region         = "ap-southeast-1"
+#     dynamodb_table = "docuflow-terraform-locks"
+#     encrypt        = true
+#   }
+# }

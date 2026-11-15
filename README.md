@@ -56,8 +56,8 @@ The following features represent the intended product scope. Implementation stat
 | API keys          | Programmatic access for developers        | Implemented |
 | Usage metering    | Track processing and API consumption      | Implemented |
 | Webhooks          | Notify external systems about job results | Implemented |
-| Observability     | Logs, metrics, and distributed tracing    | Planned |
-| Infrastructure    | Containerized AWS deployment              | Planned |
+| Observability     | Logs, metrics, and distributed tracing    | Implemented |
+| Infrastructure    | Containerized AWS deployment              | Implemented |
 
 ---
 
@@ -869,51 +869,59 @@ docuflow-ai/
 ├── apps/
 │   ├── web/
 │   │   ├── app/
-│   │   ├── components/
-│   │   ├── features/
-│   │   ├── hooks/
-│   │   └── lib/
+│   │   ├── next.config.ts
+│   │   └── Dockerfile
 │   │
 │   ├── api/
-│   │   └── src/
-│   │       ├── auth/
-│   │       ├── organizations/
-│   │       ├── documents/
-│   │       ├── processing/
-│   │       ├── api-keys/
-│   │       ├── usage/
-│   │       ├── webhooks/
-│   │       └── main.ts
+│   │   ├── src/
+│   │   │   ├── app.ts
+│   │   │   ├── auth-tenancy.ts
+│   │   │   ├── documents.ts
+│   │   │   ├── developer.ts
+│   │   │   ├── health.ts
+│   │   │   ├── observability.ts
+│   │   │   ├── processing-queue.ts
+│   │   │   └── main.ts
+│   │   └── Dockerfile
 │   │
 │   └── worker/
-│       └── src/
-│           ├── processors/
-│           ├── queues/
-│           ├── services/
-│           ├── providers/
-│           └── main.ts
+│       ├── src/
+│       │   ├── app.ts
+│       │   ├── document-processing.ts
+│       │   ├── health.ts
+│       │   ├── processing-queue.ts
+│       │   ├── webhooks.ts
+│       │   └── main.ts
+│       └── Dockerfile
 │
 ├── packages/
 │   ├── database/
-│   │   ├── prisma/
+│   │   └── prisma/
+│   ├── observability/
 │   │   └── src/
-│   ├── shared/
-│   ├── validators/
-│   ├── logger/
-│   └── config/
+│   │       ├── health.ts
+│   │       ├── logger.ts
+│   │       ├── telemetry.ts
+│   │       └── index.ts
+│   └── shared/
+│       └── src/
 │
 ├── infra/
 │   └── terraform/
 │       ├── modules/
-│       └── environments/
+│       └── envs/production/
+│
+├── tests/
+│   └── e2e/
+│
+├── .github/
+│   ├── workflows/
+│   └── scripts/
 │
 ├── docs/
 │   ├── architecture.md
-│   ├── api.md
-│   ├── deployment.md
-│   └── decisions/
+│   └── deployment.md
 │
-├── docker/
 ├── docker-compose.yml
 ├── turbo.json
 ├── pnpm-workspace.yaml
@@ -923,17 +931,17 @@ docuflow-ai/
 
 ### Workspace Responsibilities
 
-| Workspace             | Responsibility                    |
-| --------------------- | --------------------------------- |
-| `apps/web`            | Frontend application              |
-| `apps/api`            | REST API                          |
-| `apps/worker`         | Asynchronous document processing  |
-| `packages/database`   | Prisma schema and database access |
-| `packages/shared`     | Shared types and utilities        |
-| `packages/validators` | Shared validation schemas         |
-| `packages/logger`     | Structured logging                |
-| `packages/config`     | Shared configuration              |
-| `infra/terraform`     | Cloud infrastructure              |
+| Workspace                | Responsibility                        |
+| ------------------------ | ------------------------------------- |
+| `apps/web`               | Frontend application                  |
+| `apps/api`               | REST API                              |
+| `apps/worker`            | Asynchronous document processing      |
+| `packages/database`      | Prisma schema and database access     |
+| `packages/observability` | Logging, tracing, and readiness       |
+| `packages/shared`        | Shared types                          |
+| `tests/e2e`              | Cross-service end-to-end verification |
+| `infra/terraform`        | AWS infrastructure and deployment     |
+| `docs`                   | Architecture and operations guides    |
 
 ---
 
@@ -1032,12 +1040,14 @@ pnpm db:migrate
 ### Run Tests and Checks
 
 ```bash
-pnpm test
+pnpm test        # unit + integration (PostgreSQL and Redis required)
+pnpm test:e2e    # full cross-service document lifecycle
 pnpm typecheck
+pnpm lint
 pnpm build
 ```
 
-API and worker health endpoint tests exercise real HTTP requests against ephemeral local ports. API authentication, tenant-isolation, and document upload integration tests use PostgreSQL; start it with `docker compose up -d postgres` before running `pnpm test`. The document tests run against a local Cloudinary-compatible HTTP server and do not require a Cloudinary account. Worker integration tests use real PostgreSQL and Redis plus local HTTP servers for document download and Gemini responses, so they do not require a Gemini key. The API test script supplies a local-only JWT secret and default database URL; set `DATABASE_URL` and `JWT_SECRET` to override them.
+API and worker tests exercise real HTTP requests against ephemeral local ports. Integration tests use PostgreSQL and Redis; start them with `docker compose up -d postgres redis` before running `pnpm test`. Cloudinary and Gemini are replaced with local HTTP servers, so no external credentials are required. The end-to-end suite boots both applications in-process, uploads through a Cloudinary-compatible mock, processes through the real BullMQ queue, and verifies extraction, usage, tenant isolation, and API-key revocation.
 
 ### Start Applications
 
@@ -1060,115 +1070,125 @@ These commands and endpoints should be aligned with the actual scripts and appli
 
 ## 15. Testing Strategy
 
-Testing should cover business logic, integrations, security boundaries, and failure scenarios.
+Testing covers business logic, integrations, security boundaries, and failure
+scenarios.
 
 ### Unit Tests
 
-Test individual services and components:
+Fast tests run without external infrastructure:
 
-- Document validation.
-- Organization authorization.
-- API key validation.
-- Extraction schema validation.
-- Job state transitions.
-- Retry classification.
-- Usage calculations.
+- Structured logger output, level filtering, and credential redaction.
+- Readiness evaluation for healthy and degraded dependencies.
+
+```bash
+pnpm --filter @docuflow/observability test
+```
 
 ### Integration Tests
 
-Test interactions between:
+Integration suites exercise real PostgreSQL and Redis:
 
 - API and PostgreSQL.
-- API and Redis.
+- API and Redis/BullMQ.
 - Worker and BullMQ.
-- Worker and S3.
-- Worker and AI providers.
-- Webhook dispatcher and external endpoints.
+- Worker and Cloudinary (local mock).
+- Worker and Gemini (local mock).
+- Webhook dispatcher and external HTTP endpoints.
+- API keys, usage metering, retries, and tenant isolation.
 
-External AI providers should be mocked in deterministic test cases.
+```bash
+pnpm test
+```
 
 ### End-to-End Tests
 
-Important user journeys:
+The cross-service suite starts the API and worker in-process and covers:
 
 1. Register and create an organization.
-2. Upload a document.
-3. Start processing.
-4. Observe job status.
-5. Retrieve extraction results.
-6. Review and update extracted data.
-7. Revoke an API key.
-8. Verify cross-tenant access is denied.
+2. Create an API key.
+3. Request a signed upload and complete it through a Cloudinary-compatible mock.
+4. Process the document through the real BullMQ queue.
+5. Retrieve validated extraction results through the API-key job endpoint.
+6. Verify usage metering.
+7. Verify cross-tenant access is denied.
+8. Revoke the API key and confirm it can no longer authenticate.
+
+```bash
+pnpm test:e2e
+```
 
 ### Reliability Tests
 
-Test scenarios such as:
-
-- Worker termination during processing.
-- Duplicate job delivery.
-- Redis disconnection.
-- Database connection failure.
-- AI provider timeout.
-- AI provider rate limiting.
-- Invalid LLM output.
-- Webhook delivery failure.
+The worker suite covers terminal failures after exhausted attempts, malformed
+model output, transient download failures with backoff, idempotent usage
+metering, and webhook retry after a transient endpoint failure. Service-level
+readiness checks expose dependency failures to the load balancer.
 
 ---
 
 ## 16. Observability
 
-The platform should expose enough telemetry to understand application behavior and diagnose production issues.
+The platform emits enough telemetry to understand application behavior and
+diagnose production issues.
 
 ### Logging
 
-Use structured logs with fields such as:
+Both services emit one JSON object per event with fields such as:
 
-- `requestId`
-- `organizationId`
-- `documentId`
-- `jobId`
-- `workerId`
-- `durationMs`
-- `errorCode`
+- `timestamp`, `level`, `service`, `message`
+- `requestId`, `traceId`, `spanId`
+- `organizationId`, `documentId`, `jobId`, `workerId`
+- `durationMs`, `errorCode`
 
-Do not log API secrets, authentication tokens, or sensitive document content.
+Sensitive keys are redacted automatically, including authorization headers, API
+keys, passwords, tokens, and webhook signing secrets. Set `LOG_LEVEL` to
+`debug`, `info`, `warn`, or `error`.
 
-### Metrics
+### OpenTelemetry
 
-Recommended metrics:
+Tracing is enabled when `OTEL_EXPORTER_OTLP_ENDPOINT` or
+`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` is set. Manual spans cover:
 
-| Metric                    | Purpose                         |
-| ------------------------- | ------------------------------- |
-| API request latency       | API performance                 |
-| API error rate            | Application reliability         |
-| Queue waiting jobs        | Processing backlog              |
-| Job processing duration   | Worker performance              |
-| Job failure rate          | Processing reliability          |
-| AI provider latency       | External dependency performance |
-| Token consumption         | AI usage tracking               |
-| Webhook delivery failures | Integration reliability         |
-
-### Distributed Tracing
-
-Trace a document through its full lifecycle:
+- HTTP requests, including W3C trace-context extraction and `x-request-id`.
+- Document processing jobs.
+- Gemini `generateContent` calls.
+- Webhook deliveries.
 
 ```text
 HTTP Request
     └── Document Upload
           └── Job Creation
                 └── Queue
-                      └── OCR Processing
-                            └── AI Extraction
+                      └── Document Processing
+                            └── Gemini Extraction
                                   └── Validation
                                         └── Database Persistence
                                               └── Webhook Delivery
 ```
 
+### Health Checks
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /health` | Backwards-compatible liveness response |
+| `GET /health/live` | Process liveness |
+| `GET /health/ready` | PostgreSQL and Redis readiness, `503` when degraded |
+
+Both API and worker expose these endpoints. The ALB uses `/health/ready`; ECS
+container health checks use the same probe.
+
+### Metrics
+
+CloudWatch Container Insights and ALB metrics provide API latency, request
+counts, task CPU/memory, and unhealthy targets. Application-level counters such
+as queue waiting jobs and webhook failure counts can be derived from BullMQ and
+the delivery tables.
+
 ---
 
 ## 17. Deployment Architecture
 
-The intended production deployment uses AWS managed infrastructure.
+The production deployment uses AWS managed infrastructure.
 
 ```mermaid
 flowchart TB
@@ -1222,26 +1242,41 @@ flowchart TB
 
 ### Infrastructure as Code
 
-Terraform should manage:
+`infra/terraform` contains reusable modules for networking, storage, database,
+cache, secrets, the load balancer, and ECS services. The production environment
+wires them together, creates IAM roles, and defines a one-off migration task.
 
-- VPC and networking.
-- Security groups.
-- ECS clusters and services.
-- RDS.
-- ElastiCache.
-- S3 buckets.
-- IAM roles and policies.
-- Secrets references.
-- Load balancers.
-- Application scaling configuration.
+```bash
+cd infra/terraform/envs/production
+terraform init \
+  -backend-config="bucket=YOUR_STATE_BUCKET" \
+  -backend-config="key=production/terraform.tfstate" \
+  -backend-config="region=ap-southeast-1" \
+  -backend-config="dynamodb_table=YOUR_LOCK_TABLE" \
+  -backend-config="encrypt=true"
+terraform plan -out=tfplan
+terraform apply tfplan
+```
 
-Infrastructure changes should be reviewed through version control and applied through controlled deployment workflows.
+See [docs/deployment.md](docs/deployment.md) for prerequisites, GitHub OIDC
+setup, DNS, rollback, and the operational runbook.
+
+### Containers and Health Verification
+
+Each application has a multi-stage Dockerfile. API and worker images run the
+compiled TypeScript entrypoint; the web image uses the Next.js standalone
+output. ECS services use:
+
+- ALB target-group health checks on `/health/ready`.
+- Container-level health checks on liveness/readiness.
+- Deployment circuit breakers with automatic rollback.
+- Autoscaling on CPU and memory.
 
 ---
 
 ## 18. CI/CD Pipeline
 
-GitHub Actions will automate quality checks and deployment workflows.
+GitHub Actions owns quality gates and deployment.
 
 ### Pull Request Pipeline
 
@@ -1252,25 +1287,28 @@ Pull Request
 Install Dependencies
     |
     v
+Prisma Generate + Migrate
+    |
+    v
 Lint
     |
     v
 Type Check
     |
     v
-Unit Tests
+Unit + Integration Tests
     |
     v
-Integration Tests
+End-to-End Tests
     |
     v
 Build Applications
     |
     v
-Security Checks
+Dependency Audit
     |
     v
-Ready for Review
+Container Builds (api, worker, web)
 ```
 
 ### Deployment Pipeline
@@ -1279,7 +1317,7 @@ Ready for Review
 Merge to Main
     |
     v
-Run Quality Checks
+CI Success
     |
     v
 Build Docker Images
@@ -1288,16 +1326,24 @@ Build Docker Images
 Push Images to ECR
     |
     v
+Run Prisma Migration Task
+    |
+    v
 Deploy ECS Services
     |
     v
-Health Checks
+Wait for Steady State
     |
     v
-Deployment Verification
+Health Check
+    |
+    v
+Success, or automatic rollback to previous task definitions
 ```
 
-Deployment workflows should support safe rollbacks when health checks fail.
+The Terraform workflow validates formatting and configuration on pull requests.
+Manual dispatches can plan or apply infrastructure changes with the production
+environment approval.
 
 ---
 
@@ -1412,16 +1458,16 @@ The implementation is divided into milestones to prioritize a working end-to-end
 
 ### Milestone 7: Production Readiness
 
-- [ ] Add unit tests.
-- [ ] Add integration tests.
-- [ ] Add end-to-end tests.
-- [ ] Add structured logging.
-- [ ] Add OpenTelemetry instrumentation.
-- [ ] Create Terraform modules.
-- [ ] Configure GitHub Actions.
-- [ ] Deploy to AWS.
-- [ ] Verify health checks and rollback.
-- [ ] Document architecture and deployment.
+- [x] Add unit tests.
+- [x] Add integration tests.
+- [x] Add end-to-end tests.
+- [x] Add structured logging.
+- [x] Add OpenTelemetry instrumentation.
+- [x] Create Terraform modules.
+- [x] Configure GitHub Actions.
+- [x] Deploy to AWS (Terraform + ECS deployment/rollback pipeline; requires AWS credentials).
+- [x] Verify health checks and rollback.
+- [x] Document architecture and deployment.
 
 ---
 

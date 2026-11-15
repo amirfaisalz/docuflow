@@ -1,5 +1,8 @@
 import { v2 as cloudinary } from "cloudinary";
+import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { z } from "zod";
+
+const tracer = trace.getTracer("docuflow-worker");
 
 const invoiceSchema = z.object({
   invoiceNumber: z.string().nullable(),
@@ -40,41 +43,56 @@ export async function processDocument(input: { storageKey: string; mimeType: str
   const baseUrl = (process.env.GEMINI_API_BASE_URL ?? "https://generativelanguage.googleapis.com/v1beta").replace(/\/$/, "");
   let response: Response;
   try {
-    response = await fetch(`${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: AbortSignal.timeout(Number(process.env.GEMINI_TIMEOUT_MS ?? 60000)),
-      body: JSON.stringify({
-        contents: [{
-          role: "user",
-          parts: [
-            { text: "Read this invoice document. Perform OCR if needed. Return one JSON object with extractedText containing the complete readable document text and data containing invoiceNumber, vendor, invoiceDate (ISO YYYY-MM-DD when known), total (number without currency symbol), and currency (three-letter ISO code). Use null for unknown fields. confidence must be a number from 0 to 1 or null. Do not infer facts that are not present." },
-            { inlineData: { mimeType: input.mimeType, data: bytes.toString("base64") } },
-          ],
-        }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: "OBJECT",
-            properties: {
-              extractedText: { type: "STRING" },
-              data: {
+    response = await tracer.startActiveSpan("gen_ai.generate_content", {
+      attributes: { "gen_ai.system": "gemini", "gen_ai.request.model": model, "docuflow.document.mime_type": input.mimeType },
+    }, async (span) => {
+      try {
+        const result = await fetch(`${baseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal: AbortSignal.timeout(Number(process.env.GEMINI_TIMEOUT_MS ?? 60000)),
+          body: JSON.stringify({
+            contents: [{
+              role: "user",
+              parts: [
+                { text: "Read this invoice document. Perform OCR if needed. Return one JSON object with extractedText containing the complete readable document text and data containing invoiceNumber, vendor, invoiceDate (ISO YYYY-MM-DD when known), total (number without currency symbol), and currency (three-letter ISO code). Use null for unknown fields. confidence must be a number from 0 to 1 or null. Do not infer facts that are not present." },
+                { inlineData: { mimeType: input.mimeType, data: bytes.toString("base64") } },
+              ],
+            }],
+            generationConfig: {
+              responseMimeType: "application/json",
+              responseSchema: {
                 type: "OBJECT",
                 properties: {
-                  invoiceNumber: { type: "STRING", nullable: true },
-                  vendor: { type: "STRING", nullable: true },
-                  invoiceDate: { type: "STRING", nullable: true },
-                  total: { type: "NUMBER", nullable: true },
-                  currency: { type: "STRING", nullable: true },
+                  extractedText: { type: "STRING" },
+                  data: {
+                    type: "OBJECT",
+                    properties: {
+                      invoiceNumber: { type: "STRING", nullable: true },
+                      vendor: { type: "STRING", nullable: true },
+                      invoiceDate: { type: "STRING", nullable: true },
+                      total: { type: "NUMBER", nullable: true },
+                      currency: { type: "STRING", nullable: true },
+                    },
+                    required: ["invoiceNumber", "vendor", "invoiceDate", "total", "currency"],
+                  },
+                  confidence: { type: "NUMBER", nullable: true },
                 },
-                required: ["invoiceNumber", "vendor", "invoiceDate", "total", "currency"],
+                required: ["extractedText", "data", "confidence"],
               },
-              confidence: { type: "NUMBER", nullable: true },
             },
-            required: ["extractedText", "data", "confidence"],
-          },
-        },
-      }),
+          }),
+        });
+        span.setAttribute("http.response.status_code", result.status);
+        if (!result.ok) span.setStatus({ code: SpanStatusCode.ERROR, message: `Gemini returned ${result.status}` });
+        return result;
+      } catch (error) {
+        span.recordException(error instanceof Error ? error : String(error));
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error instanceof Error ? error.message : "Gemini request failed" });
+        throw error;
+      } finally {
+        span.end();
+      }
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Gemini request failed";
