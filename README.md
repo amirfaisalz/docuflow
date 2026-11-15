@@ -46,8 +46,8 @@ The following features represent the intended product scope. Implementation stat
 | ----------------- | ----------------------------------------- | ------- |
 | Authentication    | Secure user authentication                | Planned |
 | Organizations     | Multi-tenant organization management      | Planned |
-| Document upload   | Upload PDF and image files                | Planned |
-| Object storage    | Store original documents in S3            | Planned |
+| Document upload   | Upload PDF and image files                | Implemented |
+| Object storage    | Store original documents in Cloudinary    | Implemented |
 | Async processing  | Background jobs with BullMQ               | Planned |
 | OCR               | Extract text from scanned documents       | Planned |
 | AI extraction     | Generate structured JSON using LLMs       | Planned |
@@ -632,14 +632,27 @@ Organization list/create and membership list/add are tenant-scoped. The creator 
 
 ### Documents
 
+Document upload URLs are signed by the API and scoped to an organization membership. Supported formats are PDF, JPEG, and PNG; the maximum upload size is 10 MiB. `GET /documents` lists documents across the caller's organizations; pass `X-Organization-Id` to scope it to one organization. Listing and details return only metadata, never storage credentials.
+
 | Method | Endpoint                         | Description         |
 | ------ | -------------------------------- | ------------------- |
-| POST   | `/documents/upload-url`          | Generate upload URL |
+| POST   | `/documents/upload-url`          | Generate signed upload parameters |
 | POST   | `/documents/:id/complete-upload` | Confirm upload      |
 | GET    | `/documents`                     | List documents      |
 | GET    | `/documents/:id`                 | Get document        |
-| DELETE | `/documents/:id`                 | Delete document     |
-| POST   | `/documents/:id/process`         | Start processing    |
+
+Upload request:
+
+```json
+{
+  "organizationId": "<organization-id>",
+  "filename": "invoice.pdf",
+  "mimeType": "application/pdf",
+  "size": 2048
+}
+```
+
+The response contains a pending document record and a Cloudinary upload URL, API key, and signed parameters. The client uploads directly to Cloudinary as a multipart form, including the returned parameters, `api_key`, and `file`. PDF files use Cloudinary's `raw` resource type; JPEG and PNG use `image`. After a successful Cloudinary upload, call `POST /documents/:id/complete-upload`; the API verifies the private Cloudinary asset's ID, resource type, format, and byte size before changing its status to `UPLOADED`.
 
 ### Processing Jobs
 
@@ -952,7 +965,12 @@ REDIS_URL=redis://localhost:6379
 # Authentication
 JWT_SECRET=replace-with-a-secure-secret-at-least-32-chars
 
-# AWS
+# Cloudinary document storage
+CLOUDINARY_CLOUD_NAME=your-cloud-name
+CLOUDINARY_API_KEY=your-api-key
+CLOUDINARY_API_SECRET=your-api-secret
+
+# AWS (reserved for future infrastructure integrations)
 AWS_REGION=ap-southeast-1
 AWS_S3_BUCKET=docuflow-documents
 AWS_ACCESS_KEY_ID=
@@ -990,7 +1008,7 @@ pnpm typecheck
 pnpm build
 ```
 
-API and worker health endpoint tests exercise real HTTP requests against ephemeral local ports. The API authentication and tenant-isolation integration test also uses PostgreSQL; start it with `docker compose up -d postgres` before running `pnpm test`. The API test script supplies a local-only JWT secret and default database URL; set `DATABASE_URL` and `JWT_SECRET` to override them.
+API and worker health endpoint tests exercise real HTTP requests against ephemeral local ports. API authentication, tenant-isolation, and document upload integration tests use PostgreSQL; start it with `docker compose up -d postgres` before running `pnpm test`. The document tests run against a local Cloudinary-compatible HTTP server and do not require a Cloudinary account. The API test script supplies a local-only JWT secret and default database URL; set `DATABASE_URL` and `JWT_SECRET` to override them.
 
 ### Start Applications
 
@@ -1325,12 +1343,12 @@ The implementation is divided into milestones to prioritize a working end-to-end
 
 ### Milestone 3: Document Upload
 
-- [ ] Implement document metadata.
-- [ ] Configure AWS S3.
-- [ ] Implement pre-signed upload URLs.
-- [ ] Validate file types and sizes.
-- [ ] Implement upload confirmation.
-- [ ] Add document listing and details.
+- [x] Implement document metadata.
+- [x] Configure Cloudinary document storage.
+- [x] Implement signed upload parameters.
+- [x] Validate file types and sizes.
+- [x] Implement upload confirmation.
+- [x] Add document listing and details.
 
 ### Milestone 4: Background Processing
 

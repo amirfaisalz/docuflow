@@ -8,6 +8,7 @@ datasource db {
 }
 
 enum DocumentStatus {
+  PENDING_UPLOAD
   UPLOADED
   QUEUED
   PROCESSING

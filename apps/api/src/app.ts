@@ -3,6 +3,7 @@ import { Body, Controller, Get, Headers, HttpCode, Inject, Module, Param, Post }
 import { NestFactory } from "@nestjs/core";
 import { PrismaClient } from "@prisma/client";
 import { AuthTenancyService } from "./auth-tenancy";
+import { DocumentsService } from "./documents";
 
 @Controller("health")
 class HealthController {
@@ -45,9 +46,37 @@ class AuthTenancyController {
   }
 }
 
+@Controller("api/v1/documents")
+class DocumentsController {
+  constructor(
+    @Inject(AuthTenancyService) private readonly auth: AuthTenancyService,
+    @Inject(DocumentsService) private readonly documents: DocumentsService,
+  ) {}
+
+  @Post("upload-url") @HttpCode(201) async createUpload(@Headers("authorization") authorization: string | undefined, @Body() body: { organizationId?: unknown; filename?: unknown; mimeType?: unknown; size?: unknown }) {
+    const user = await this.auth.authenticate(authorization);
+    return this.documents.createUpload(user.id, body);
+  }
+
+  @Post(":id/complete-upload") @HttpCode(200) async completeUpload(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.documents.completeUpload(user.id, id);
+  }
+
+  @Get() async list(@Headers("authorization") authorization: string | undefined, @Headers("x-organization-id") organizationId?: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.documents.list(user.id, organizationId);
+  }
+
+  @Get(":id") async get(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.documents.get(user.id, id);
+  }
+}
+
 @Module({
-  controllers: [HealthController, AuthTenancyController],
-  providers: [PrismaClient, AuthTenancyService],
+  controllers: [HealthController, AuthTenancyController, DocumentsController],
+  providers: [PrismaClient, AuthTenancyService, DocumentsService],
 })
 class ApiModule {}
 
