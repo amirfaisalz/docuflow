@@ -8,6 +8,8 @@ import {
   ServiceUnavailableException,
 } from "@nestjs/common";
 import { DocumentStatus, MembershipRole, PrismaClient } from "@prisma/client";
+import { Queue } from "bullmq";
+import { createRedisConnection } from "./processing-queue";
 
 const maxFileBytes = 10 * 1024 * 1024;
 const acceptedTypes = new Map([
@@ -18,7 +20,10 @@ const acceptedTypes = new Map([
 
 @Injectable()
 export class DocumentsService {
-  constructor(@Inject(PrismaClient) private readonly prisma: PrismaClient) {}
+  constructor(
+    @Inject(PrismaClient) private readonly prisma: PrismaClient,
+    @Inject("PROCESSING_QUEUE") private readonly queue: Queue,
+  ) {}
 
   async createUpload(userId: string, input: { organizationId?: unknown; filename?: unknown; mimeType?: unknown; size?: unknown }) {
     const organizationId = typeof input.organizationId === "string" ? input.organizationId : "";
@@ -77,7 +82,7 @@ export class DocumentsService {
   async completeUpload(userId: string, documentId: string) {
     const document = await this.findAuthorizedDocument(userId, documentId);
     if (document.status !== DocumentStatus.PENDING_UPLOAD) {
-      if (document.status === DocumentStatus.UPLOADED) return this.publicDocument(document);
+      if ([DocumentStatus.UPLOADED, DocumentStatus.QUEUED, DocumentStatus.PROCESSING, DocumentStatus.COMPLETED].some((status) => document.status === status)) return this.publicDocument(document);
       throw new BadRequestException("Document is not awaiting upload");
     }
 
@@ -102,11 +107,24 @@ export class DocumentsService {
       throw new BadRequestException("Uploaded file does not match the declared document metadata");
     }
 
-    const updated = await this.prisma.document.updateMany({
-      where: { id: document.id, organizationId: document.organizationId, status: DocumentStatus.PENDING_UPLOAD },
-      data: { status: DocumentStatus.UPLOADED },
+    const queued = await this.prisma.$transaction(async (tx) => {
+      const updated = await tx.document.updateMany({
+        where: { id: document.id, organizationId: document.organizationId, status: DocumentStatus.PENDING_UPLOAD },
+        data: { status: DocumentStatus.QUEUED },
+      });
+      if (updated.count === 0) return null;
+      return tx.processingJob.create({ data: { documentId: document.id } });
     });
-    if (updated.count === 0) return this.publicDocument(await this.findAuthorizedDocument(userId, documentId));
+    if (!queued) return this.publicDocument(await this.findAuthorizedDocument(userId, documentId));
+    try {
+      await this.queue.add("process-document", { jobId: queued.id, documentId: document.id }, { jobId: queued.id, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+    } catch {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.processingJob.update({ where: { id: queued.id }, data: { status: "FAILED", errorCode: "QUEUE_UNAVAILABLE", errorMessage: "Could not enqueue document processing" } });
+        await tx.document.update({ where: { id: document.id }, data: { status: DocumentStatus.FAILED } });
+      });
+      throw new ServiceUnavailableException("Could not queue document processing");
+    }
     return this.publicDocument(await this.prisma.document.findUniqueOrThrow({ where: { id: document.id } }));
   }
 
@@ -125,6 +143,43 @@ export class DocumentsService {
 
   async get(userId: string, documentId: string) {
     return this.publicDocument(await this.findAuthorizedDocument(userId, documentId));
+  }
+
+  async listJobs(userId: string, documentId: string) {
+    await this.findAuthorizedDocument(userId, documentId);
+    return this.prisma.processingJob.findMany({ where: { documentId }, orderBy: { createdAt: "desc" } });
+  }
+
+  async getJob(userId: string, jobId: string) {
+    const job = await this.prisma.processingJob.findFirst({ where: { id: jobId, document: { organization: { memberships: { some: { userId } } } } } });
+    if (!job) throw new NotFoundException("Processing job not found");
+    return job;
+  }
+
+  async retryJob(userId: string, jobId: string) {
+    const job = await this.getJob(userId, jobId);
+    if (job.status !== "FAILED") throw new BadRequestException("Only failed jobs can be retried");
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const changed = await tx.processingJob.updateMany({
+        where: { id: job.id, status: "FAILED" },
+        data: { status: "QUEUED", attempts: 0, errorCode: null, errorMessage: null },
+      });
+      if (changed.count === 0) throw new BadRequestException("Only failed jobs can be retried");
+      await tx.document.update({ where: { id: job.documentId }, data: { status: DocumentStatus.QUEUED } });
+      return tx.processingJob.findUniqueOrThrow({ where: { id: job.id } });
+    });
+    try {
+      const queueJob = await this.queue.getJob(job.id);
+      if (queueJob) await queueJob.remove();
+      await this.queue.add("process-document", { jobId: job.id, documentId: job.documentId }, { jobId: job.id, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+    } catch {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.processingJob.update({ where: { id: job.id }, data: { status: "FAILED", errorCode: "QUEUE_UNAVAILABLE", errorMessage: "Could not enqueue document processing" } });
+        await tx.document.update({ where: { id: job.documentId }, data: { status: DocumentStatus.FAILED } });
+      });
+      throw new ServiceUnavailableException("Could not queue document processing");
+    }
+    return updated;
   }
 
   private async findAuthorizedDocument(userId: string, documentId: string) {

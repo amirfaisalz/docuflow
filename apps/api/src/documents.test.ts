@@ -3,7 +3,10 @@ import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { INestApplication } from "@nestjs/common";
+import { PrismaClient } from "@prisma/client";
+import { Queue } from "bullmq";
 import { createApiApp } from "./app";
+import { createRedisConnection, processingQueueName } from "./processing-queue";
 
 const cloudName = "docuflow-test";
 const apiKey = "test-cloudinary-key";
@@ -13,6 +16,8 @@ let cloudinaryUrl: string;
 let app: INestApplication;
 let baseUrl: string;
 const cloudAssets = new Map<string, { bytes: number; format: string; resource_type: string; public_id: string }>;
+const prisma = new PrismaClient();
+const processingQueue = new Queue(processingQueueName, { connection: createRedisConnection() });
 
 before(async () => {
   cloudinary = createServer(async (request, response) => {
@@ -75,6 +80,9 @@ before(async () => {
 
 after(async () => {
   await app.close();
+  await processingQueue.obliterate({ force: true });
+  await processingQueue.close();
+  await prisma.$disconnect();
   await new Promise<void>((resolve, reject) => cloudinary.close((error) => error ? reject(error) : resolve()));
   delete process.env.CLOUDINARY_CLOUD_NAME;
   delete process.env.CLOUDINARY_API_KEY;
@@ -145,7 +153,38 @@ test("members request a signed Cloudinary upload, confirm verified assets, and l
 
   const confirmation = await request(`/documents/${upload.document.id}/complete-upload`, tenant.accessToken, {});
   assert.equal(confirmation.status, 200, await confirmation.clone().text());
-  assert.equal((await confirmation.json() as { status: string }).status, "UPLOADED");
+  const confirmedDocument = await confirmation.json() as { id: string; status: string };
+  assert.ok(["QUEUED", "PROCESSING", "COMPLETED"].includes(confirmedDocument.status));
+  const duplicateConfirmation = await request(`/documents/${upload.document.id}/complete-upload`, tenant.accessToken, {});
+  assert.equal(duplicateConfirmation.status, 200);
+  assert.ok(["QUEUED", "PROCESSING", "COMPLETED"].includes((await duplicateConfirmation.json() as { status: string }).status));
+
+  const documentJobsResponse = await request(`/documents/${upload.document.id}/jobs`, tenant.accessToken);
+  assert.equal(documentJobsResponse.status, 200);
+  const jobs = await documentJobsResponse.json() as Array<{ id: string; documentId: string; status: string }>;
+  assert.equal(jobs.length, 1);
+  assert.equal(jobs[0].documentId, upload.document.id);
+  assert.ok(["QUEUED", "PROCESSING", "COMPLETED"].includes(jobs[0].status));
+
+  await processingQueue.remove(jobs[0].id);
+  await prisma.processingJob.update({ where: { id: jobs[0].id }, data: { status: "FAILED", errorCode: "TEST_FAILURE", errorMessage: "retry test" } });
+  await prisma.document.update({ where: { id: upload.document.id }, data: { status: "FAILED" } });
+
+  const jobResponse = await request(`/jobs/${jobs[0].id}`, tenant.accessToken);
+  assert.equal(jobResponse.status, 200);
+  const jobBody = await jobResponse.json() as { id: string; status: string; errorCode: string };
+  assert.equal(jobBody.id, jobs[0].id);
+  assert.equal(jobBody.status, "FAILED");
+  assert.equal(jobBody.errorCode, "TEST_FAILURE");
+
+  const retryResponse = await request(`/jobs/${jobs[0].id}/retry`, tenant.accessToken, {});
+  assert.equal(retryResponse.status, 202);
+  assert.equal((await retryResponse.json() as { status: string }).status, "QUEUED");
+  const retriedDocument = await request(`/documents/${upload.document.id}`, tenant.accessToken);
+  assert.ok(["QUEUED", "PROCESSING", "COMPLETED"].includes((await retriedDocument.json() as { status: string }).status));
+
+  const outsiderJobResponse = await request(`/jobs/${jobs[0].id}`, outsider.accessToken);
+  assert.equal(outsiderJobResponse.status, 404);
 
   const listing = await request("/documents", tenant.accessToken);
   assert.equal(listing.status, 200);

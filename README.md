@@ -48,7 +48,7 @@ The following features represent the intended product scope. Implementation stat
 | Organizations     | Multi-tenant organization management      | Planned |
 | Document upload   | Upload PDF and image files                | Implemented |
 | Object storage    | Store original documents in Cloudinary    | Implemented |
-| Async processing  | Background jobs with BullMQ               | Planned |
+| Async processing  | Background jobs with BullMQ               | Implemented |
 | OCR               | Extract text from scanned documents       | Planned |
 | AI extraction     | Generate structured JSON using LLMs       | Planned |
 | Schema validation | Validate extracted data                   | Planned |
@@ -652,16 +652,19 @@ Upload request:
 }
 ```
 
-The response contains a pending document record and a Cloudinary upload URL, API key, and signed parameters. The client uploads directly to Cloudinary as a multipart form, including the returned parameters, `api_key`, and `file`. PDF files use Cloudinary's `raw` resource type; JPEG and PNG use `image`. After a successful Cloudinary upload, call `POST /documents/:id/complete-upload`; the API verifies the private Cloudinary asset's ID, resource type, format, and byte size before changing its status to `UPLOADED`.
+The response contains a pending document record and a Cloudinary upload URL, API key, and signed parameters. The client uploads directly to Cloudinary as a multipart form, including the returned parameters, `api_key`, and `file`. PDF files use Cloudinary's `raw` resource type; JPEG and PNG use `image`. After a successful Cloudinary upload, call `POST /documents/:id/complete-upload`; the API verifies the private Cloudinary asset's ID, resource type, format, and byte size before changing its status to `QUEUED` and creating a processing job.
 
 ### Processing Jobs
+
+After an upload is verified, its document becomes `QUEUED` and exactly one processing job is persisted and enqueued in the `document-processing` BullMQ queue. Jobs use three attempts with exponential backoff. The worker updates job and document lifecycle state in PostgreSQL; Milestone 4 uses a placeholder processor, while OCR and extraction belong to Milestone 5. Exhausted failures are recorded in PostgreSQL and copied to the `document-processing-failed` BullMQ queue. A failed job can be retried through the API, and its persisted error information is available in the job status response.
 
 | Method | Endpoint              | Description           |
 | ------ | --------------------- | --------------------- |
 | GET    | `/jobs/:id`           | Get job status        |
 | GET    | `/documents/:id/jobs` | List document jobs    |
 | POST   | `/jobs/:id/retry`     | Retry failed job      |
-| GET    | `/jobs/:id/result`    | Get extraction result |
+
+Set `REDIS_URL` for API and worker services (defaults to `redis://localhost:6379`). The worker also accepts `WORKER_CONCURRENCY` (default `2`).
 
 ### API Keys and Usage
 
@@ -1352,14 +1355,14 @@ The implementation is divided into milestones to prioritize a working end-to-end
 
 ### Milestone 4: Background Processing
 
-- [ ] Configure Redis.
-- [ ] Configure BullMQ.
-- [ ] Create document processing queues.
-- [ ] Implement worker lifecycle.
-- [ ] Add job status tracking.
-- [ ] Implement retry and backoff.
-- [ ] Implement idempotent processing.
-- [ ] Add failed job handling.
+- [x] Configure Redis.
+- [x] Configure BullMQ.
+- [x] Create document processing queues.
+- [x] Implement worker lifecycle.
+- [x] Add job status tracking.
+- [x] Implement retry and backoff.
+- [x] Implement idempotent processing.
+- [x] Add failed job handling.
 
 ### Milestone 5: OCR and AI Extraction
 

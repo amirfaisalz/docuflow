@@ -1,9 +1,10 @@
 import "reflect-metadata";
-import { Body, Controller, Get, Headers, HttpCode, Inject, Module, Param, Post } from "@nestjs/common";
+import { Body, Controller, Get, Headers, HttpCode, Inject, Injectable, Module, OnApplicationShutdown, Param, Post } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { PrismaClient } from "@prisma/client";
 import { AuthTenancyService } from "./auth-tenancy";
 import { DocumentsService } from "./documents";
+import { createProcessingQueue } from "./processing-queue";
 
 @Controller("health")
 class HealthController {
@@ -72,16 +73,52 @@ class DocumentsController {
     const user = await this.auth.authenticate(authorization);
     return this.documents.get(user.id, id);
   }
+
+  @Get(":id/jobs") async listJobs(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.documents.listJobs(user.id, id);
+  }
+}
+
+@Controller("api/v1/jobs")
+class JobsController {
+  constructor(
+    @Inject(AuthTenancyService) private readonly auth: AuthTenancyService,
+    @Inject(DocumentsService) private readonly documents: DocumentsService,
+  ) {}
+
+  @Get(":id") async get(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.documents.getJob(user.id, id);
+  }
+
+  @Post(":id/retry") @HttpCode(202) async retry(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.documents.retryJob(user.id, id);
+  }
+}
+
+@Injectable()
+class ProcessingQueueLifecycle implements OnApplicationShutdown {
+  constructor(@Inject("PROCESSING_QUEUE") private readonly queue: ReturnType<typeof createProcessingQueue>) {}
+  async onApplicationShutdown() { await this.queue.close(); }
 }
 
 @Module({
-  controllers: [HealthController, AuthTenancyController, DocumentsController],
-  providers: [PrismaClient, AuthTenancyService, DocumentsService],
+  controllers: [HealthController, AuthTenancyController, DocumentsController, JobsController],
+  providers: [
+    PrismaClient,
+    AuthTenancyService,
+    DocumentsService,
+    { provide: "PROCESSING_QUEUE", useFactory: createProcessingQueue, inject: [] },
+    ProcessingQueueLifecycle,
+  ],
 })
 class ApiModule {}
 
 export async function createApiApp() {
   const app = await NestFactory.create(ApiModule, { logger: ["error"] });
   app.enableShutdownHooks();
+  app.get(ProcessingQueueLifecycle);
   return app;
 }
