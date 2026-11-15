@@ -1,0 +1,19 @@
+{
+  "name": "@docuflow/database",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "build": "prisma generate",
+    "lint": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/docuflow} prisma validate",
+    "typecheck": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/docuflow} prisma validate"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0"
+  }
+}

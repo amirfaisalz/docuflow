@@ -1,0 +1,105 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum DocumentStatus {
+  UPLOADED
+  QUEUED
+  PROCESSING
+  COMPLETED
+  NEEDS_REVIEW
+  FAILED
+}
+
+enum JobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MEMBER
+  DEVELOPER
+}
+
+model Organization {
+  id          String       @id @default(uuid())
+  name        String
+  slug        String       @unique
+  memberships Membership[]
+  documents   Document[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model User {
+  id          String       @id @default(uuid())
+  email       String       @unique
+  name        String?
+  memberships Membership[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+model Membership {
+  id             String         @id @default(uuid())
+  userId         String
+  organizationId String
+  role           MembershipRole @default(MEMBER)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime       @default(now())
+
+  @@unique([userId, organizationId])
+  @@index([organizationId, role])
+}
+
+model Document {
+  id             String         @id @default(uuid())
+  organizationId String
+  filename       String
+  mimeType       String
+  size           BigInt
+  storageKey     String         @unique
+  status         DocumentStatus @default(UPLOADED)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  jobs           ProcessingJob[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+}
+
+model ProcessingJob {
+  id           String            @id @default(uuid())
+  documentId   String
+  status       JobStatus         @default(QUEUED)
+  attempts     Int               @default(0)
+  errorCode    String?
+  errorMessage String?
+  document     Document          @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  result       ExtractionResult?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([documentId, createdAt])
+  @@index([status, createdAt])
+}
+
+model ExtractionResult {
+  id         String        @id @default(uuid())
+  jobId      String        @unique
+  data       Json
+  confidence Float?
+  job        ProcessingJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdAt  DateTime      @default(now())
+}
