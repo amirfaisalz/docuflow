@@ -44,18 +44,18 @@ The following features represent the intended product scope. Implementation stat
 
 | Feature           | Description                               | Status  |
 | ----------------- | ----------------------------------------- | ------- |
-| Authentication    | Secure user authentication                | Planned |
-| Organizations     | Multi-tenant organization management      | Planned |
+| Authentication    | Secure user authentication                | Implemented |
+| Organizations     | Multi-tenant organization management      | Implemented |
 | Document upload   | Upload PDF and image files                | Implemented |
 | Object storage    | Store original documents in Cloudinary    | Implemented |
 | Async processing  | Background jobs with BullMQ               | Implemented |
-| OCR               | Extract text from scanned documents       | Planned |
-| AI extraction     | Generate structured JSON using LLMs       | Planned |
-| Schema validation | Validate extracted data                   | Planned |
+| OCR               | Extract text from scanned documents       | Implemented |
+| AI extraction     | Generate structured JSON using LLMs       | Implemented |
+| Schema validation | Validate extracted data                   | Implemented |
 | Human review      | Review and correct extracted results      | Planned |
-| API keys          | Programmatic access for developers        | Planned |
-| Usage metering    | Track processing and API consumption      | Planned |
-| Webhooks          | Notify external systems about job results | Planned |
+| API keys          | Programmatic access for developers        | Implemented |
+| Usage metering    | Track processing and API consumption      | Implemented |
+| Webhooks          | Notify external systems about job results | Implemented |
 | Observability     | Logs, metrics, and distributed tracing    | Planned |
 | Infrastructure    | Containerized AWS deployment              | Planned |
 
@@ -664,16 +664,35 @@ After an upload is verified, its document becomes `QUEUED` and exactly one proce
 | GET    | `/documents/:id/jobs` | List document jobs    |
 | POST   | `/jobs/:id/retry`     | Retry failed job      |
 
-Set `REDIS_URL` for API and worker services (defaults to `redis://localhost:6379`). The worker also accepts `WORKER_CONCURRENCY` (default `2`).
+Set `REDIS_URL` for API and worker services (defaults to `redis://localhost:6379`). The worker also accepts `WORKER_CONCURRENCY` (default `2`) for document jobs and `WEBHOOK_CONCURRENCY` (default `5`) for webhook deliveries.
 
 ### API Keys and Usage
 
-| Method | Endpoint        | Description       |
-| ------ | --------------- | ----------------- |
-| GET    | `/api-keys`     | List API keys     |
-| POST   | `/api-keys`     | Create API key    |
-| DELETE | `/api-keys/:id` | Revoke API key    |
-| GET    | `/usage`        | Get usage summary |
+Organization owners, admins, and developers can create API keys for programmatic access. The plaintext secret is returned only when the key is created; the API stores a SHA-256 hash and a searchable prefix. Revocation is immediate and does not delete historical usage records.
+
+| Method | Endpoint                     | Authentication      | Description        |
+| ------ | ---------------------------- | ------------------- | ------------------ |
+| POST   | `/api/v1/api-keys`           | User access token   | Create API key     |
+| GET    | `/api/v1/api-keys`           | User access token   | List API keys      |
+| DELETE | `/api/v1/api-keys/:id`       | User access token   | Revoke API key     |
+| POST   | `/api/v1/documents/:id/process` | API key          | Create or retry a processing job |
+| GET    | `/api/v1/jobs/:id`           | API key or user token | Get job status and result |
+| GET    | `/api/v1/usage`              | API key or user token | Get usage summary |
+
+Create a key with `POST /api/v1/api-keys`:
+
+```json
+{
+  "organizationId": "org_123",
+  "name": "Invoice integration"
+}
+```
+
+The response includes the one-time `secret` (`df_live_...`). Send it as `Authorization: Bearer df_live_...` to the programmatic document and job endpoints. Key management endpoints use the normal user access token. Plaintext secrets are never returned by list endpoints.
+
+`GET /api/v1/usage` accepts optional `from` and `to` ISO timestamps. User-token requests select the organization with `x-organization-id`; API-key requests are scoped to the key's organization. The response aggregates successful processing operations, LLM input/output tokens, processing duration, and recent usage records.
+
+Usage is written transactionally with extraction results. The unique `UsageRecord.jobId` constraint makes metering idempotent when a job is retried or replayed.
 
 ### Example: Create Processing Request
 
@@ -694,7 +713,7 @@ Response:
 }
 ```
 
-The response confirms job creation, not processing completion.
+The response confirms job creation, not processing completion. The endpoint is idempotent: it returns the active or completed job instead of creating a duplicate, and reuses a failed job as a retry.
 
 Clients can poll `GET /api/v1/jobs/:id`; the response includes `result: { extractedText, data, confidence, model }` after successful processing, or `result: null` beforehand. Data is invoice-shaped: `invoiceNumber`, `vendor`, `invoiceDate` (ISO date), `total`, and `currency`; unknown values are `null`. Extraction results remain available alongside job status. The worker requires `GEMINI_API_KEY`; configure `GEMINI_MODEL` to select another supported Gemini model. `GEMINI_API_BASE_URL` and `GEMINI_TIMEOUT_MS` are optional overrides.
 
@@ -805,17 +824,19 @@ Example event:
 }
 ```
 
+### Webhook Endpoints
+
+| Method | Endpoint                 | Description            |
+| ------ | ------------------------ | ---------------------- |
+| POST   | `/api/v1/webhooks`       | Register an endpoint   |
+| GET    | `/api/v1/webhooks`       | List endpoints and recent deliveries |
+| DELETE | `/api/v1/webhooks/:id`   | Delete an endpoint     |
+
+Only organization owners, admins, and developers can register or delete endpoints. Registration requires an HTTPS URL and one or more event types: `document.processing.completed` and `document.processing.failed`. The response includes the one-time `signingSecret`; the database stores it encrypted with `WEBHOOK_ENCRYPTION_KEY` (or `JWT_SECRET` when the dedicated key is absent).
+
 ### Webhook Reliability
 
-The webhook dispatcher should support:
-
-- Signed payloads.
-- Delivery attempt tracking.
-- Configurable retry policies.
-- Exponential backoff.
-- Request timeouts.
-- Delivery history.
-- Duplicate event handling.
+Webhook delivery is asynchronous through the `docuflow-webhooks` BullMQ queue. Deliveries use five attempts with exponential backoff, a 10-second request timeout, persistent delivery records, and per-attempt history. The payload is JSON and includes a unique event ID. The `x-docuflow-delivery` header carries that ID, while `x-docuflow-signature` contains `t=<unix-seconds>,v1=<hex HMAC>`. Sign the string `<t>.<eventId>.<raw body>` with the endpoint signing secret to verify authenticity.
 
 Webhook consumers should use the event ID to implement idempotent event handling.
 
@@ -823,19 +844,17 @@ Webhook consumers should use the event ID to implement idempotent event handling
 
 ## 12. Usage Metering
 
-The platform should track resource consumption at the organization level.
+The platform tracks resource consumption at the organization level.
 
-Potential usage metrics:
+Implemented usage metrics:
 
-- Number of documents processed.
-- Total pages processed.
-- OCR requests.
+- Successful documents processed.
 - LLM input tokens.
 - LLM output tokens.
-- Total processing duration.
-- Failed processing attempts.
+- Processing duration in milliseconds.
+- Recent operations by job ID.
 
-Usage records should be tied to a unique operation so retries do not accidentally create duplicate billable usage.
+Usage records are tied to a unique processing job, so retries and replays do not create duplicate billable usage.
 
 The initial implementation should focus on accurate tracking before introducing subscription plans or complex billing logic.
 
@@ -967,6 +986,8 @@ REDIS_URL=redis://localhost:6379
 
 # Authentication
 JWT_SECRET=replace-with-a-secure-secret-at-least-32-chars
+# Encrypts webhook signing secrets at rest. Falls back to JWT_SECRET when omitted.
+WEBHOOK_ENCRYPTION_KEY=replace-with-a-separate-secret-at-least-32-chars
 
 # Cloudinary document storage
 CLOUDINARY_CLOUD_NAME=your-cloud-name
@@ -1381,13 +1402,13 @@ The implementation is divided into milestones to prioritize a working end-to-end
 
 ### Milestone 6: Developer Experience
 
-- [ ] Implement API key generation.
-- [ ] Implement API key hashing and revocation.
-- [ ] Add document processing API.
-- [ ] Add job status API.
-- [ ] Implement usage metering.
-- [ ] Implement webhook endpoints.
-- [ ] Add webhook signing and retries.
+- [x] Implement API key generation.
+- [x] Implement API key hashing and revocation.
+- [x] Add document processing API.
+- [x] Add job status API.
+- [x] Implement usage metering.
+- [x] Implement webhook endpoints.
+- [x] Add webhook signing and retries.
 
 ### Milestone 7: Production Readiness
 

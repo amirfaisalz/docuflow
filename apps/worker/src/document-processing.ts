@@ -24,7 +24,7 @@ export class ProcessingError extends Error {
   }
 }
 
-export async function processDocument(input: { storageKey: string; mimeType: string; filename: string }): Promise<DocumentExtraction & { model: string }> {
+export async function processDocument(input: { storageKey: string; mimeType: string; filename: string }): Promise<DocumentExtraction & { model: string; inputTokens: number; outputTokens: number }> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new ProcessingError("PROVIDER_NOT_CONFIGURED", "GEMINI_API_KEY is required to process documents");
   if (!new Set(["application/pdf", "image/jpeg", "image/png"]).has(input.mimeType)) {
@@ -105,7 +105,13 @@ export async function processDocument(input: { storageKey: string; mimeType: str
   if (!parsed.success) {
     throw new ProcessingError("INVALID_MODEL_RESPONSE", `Gemini extraction failed schema validation: ${parsed.error.issues.map((issue) => issue.path.join(".") + " " + issue.message).join("; ")}`);
   }
-  return { ...parsed.data, model };
+  const usage = (payload as { usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number } }).usageMetadata;
+  return {
+    ...parsed.data,
+    model,
+    inputTokens: Number.isSafeInteger(usage?.promptTokenCount) && (usage?.promptTokenCount ?? 0) >= 0 ? usage!.promptTokenCount! : 0,
+    outputTokens: Number.isSafeInteger(usage?.candidatesTokenCount) && (usage?.candidatesTokenCount ?? 0) >= 0 ? usage!.candidatesTokenCount! : 0,
+  };
 }
 
 async function downloadDocument(storageKey: string, mimeType: string) {

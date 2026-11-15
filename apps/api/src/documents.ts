@@ -159,21 +159,56 @@ export class DocumentsService {
     return job;
   }
 
-  async retryJob(userId: string, jobId: string) {
-    const job = await this.getJob(userId, jobId);
-    if (job.status !== "FAILED") throw new BadRequestException("Only failed jobs can be retried");
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const changed = await tx.processingJob.updateMany({
-        where: { id: job.id, status: "FAILED" },
-        data: { status: "QUEUED", attempts: 0, errorCode: null, errorMessage: null },
-      });
-      if (changed.count === 0) throw new BadRequestException("Only failed jobs can be retried");
-      await tx.document.update({ where: { id: job.documentId }, data: { status: DocumentStatus.QUEUED } });
-      return tx.processingJob.findUniqueOrThrow({ where: { id: job.id } });
+  async getJobForOrganization(organizationId: string, jobId: string) {
+    const job = await this.prisma.processingJob.findFirst({
+      where: { id: jobId, document: { organizationId } },
+      include: { result: true },
+    });
+    if (!job) throw new NotFoundException("Processing job not found");
+    return job;
+  }
+
+  async processDocument(userId: string, documentId: string) {
+    const document = await this.findAuthorizedDocument(userId, documentId);
+    return this.enqueueDocument(document);
+  }
+
+  async processDocumentForOrganization(organizationId: string, documentId: string) {
+    const document = await this.prisma.document.findFirst({ where: { id: documentId, organizationId } });
+    if (!document) throw new NotFoundException("Document not found");
+    return this.enqueueDocument(document);
+  }
+
+  private async enqueueDocument(document: { id: string; organizationId: string; status: DocumentStatus }) {
+    const existing = await this.prisma.processingJob.findFirst({ where: { documentId: document.id }, orderBy: { createdAt: "desc" } });
+    if (existing && (existing.status === "QUEUED" || existing.status === "PROCESSING" || existing.status === "COMPLETED")) return existing;
+    if (document.status === DocumentStatus.PENDING_UPLOAD) throw new BadRequestException("Complete the document upload before processing");
+    if (existing?.status === "FAILED") return this.retryExistingJob(existing);
+
+    const job = await this.prisma.$transaction(async (tx) => {
+      const created = await tx.processingJob.create({ data: { documentId: document.id } });
+      await tx.document.update({ where: { id: document.id }, data: { status: DocumentStatus.QUEUED } });
+      return created;
     });
     try {
-      const queueJob = await this.queue.getJob(job.id);
-      if (queueJob) await queueJob.remove();
+      await this.queue.add("process-document", { jobId: job.id, documentId: document.id }, { jobId: job.id, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
+    } catch {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.processingJob.update({ where: { id: job.id }, data: { status: "FAILED", errorCode: "QUEUE_UNAVAILABLE", errorMessage: "Could not enqueue document processing" } });
+        await tx.document.update({ where: { id: document.id }, data: { status: DocumentStatus.FAILED } });
+      });
+      throw new ServiceUnavailableException("Could not queue document processing");
+    }
+    return job;
+  }
+
+  private async retryExistingJob(job: { id: string; documentId: string }) {
+    const changed = await this.prisma.processingJob.updateMany({ where: { id: job.id, status: "FAILED" }, data: { status: "QUEUED", attempts: 0, errorCode: null, errorMessage: null } });
+    if (changed.count === 0) return this.prisma.processingJob.findUniqueOrThrow({ where: { id: job.id } });
+    await this.prisma.document.update({ where: { id: job.documentId }, data: { status: DocumentStatus.QUEUED } });
+    try {
+      const queued = await this.queue.getJob(job.id);
+      if (queued) await queued.remove();
       await this.queue.add("process-document", { jobId: job.id, documentId: job.documentId }, { jobId: job.id, attempts: 3, backoff: { type: "exponential", delay: 1000 } });
     } catch {
       await this.prisma.$transaction(async (tx) => {
@@ -182,7 +217,13 @@ export class DocumentsService {
       });
       throw new ServiceUnavailableException("Could not queue document processing");
     }
-    return updated;
+    return this.prisma.processingJob.findUniqueOrThrow({ where: { id: job.id } });
+  }
+
+  async retryJob(userId: string, jobId: string) {
+    const job = await this.getJob(userId, jobId);
+    if (job.status !== "FAILED") throw new BadRequestException("Only failed jobs can be retried");
+    return this.retryExistingJob(job);
   }
 
   private async findAuthorizedDocument(userId: string, documentId: string) {

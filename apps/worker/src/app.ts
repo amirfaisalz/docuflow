@@ -5,6 +5,7 @@ import { Job, Queue, Worker } from "bullmq";
 import { PrismaClient } from "@prisma/client";
 import { createRedisConnection, processingQueueName } from "./processing-queue";
 import { processDocument, ProcessingError } from "./document-processing";
+import { createWebhookWorker, enqueueWebhookEvents, webhookQueueName } from "./webhooks";
 
 @Controller("health")
 class HealthController {
@@ -18,6 +19,8 @@ class HealthController {
 class ProcessingWorkerLifecycle implements OnApplicationShutdown {
   private readonly prisma = new PrismaClient();
   private readonly failedQueue = new Queue(`${processingQueueName}-failed`, { connection: createRedisConnection() });
+  private readonly webhookQueue = new Queue(webhookQueueName, { connection: createRedisConnection() });
+  private readonly webhookWorker = createWebhookWorker(this.prisma);
   private readonly worker = new Worker(processingQueueName, async (job: Job<{ jobId: string; documentId: string }>) => {
     const processing = await this.prisma.processingJob.updateMany({
       where: {
@@ -29,6 +32,7 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
     });
     if (processing.count === 0) return;
     try {
+      const startedAt = Date.now();
       await this.prisma.document.update({ where: { id: job.data.documentId }, data: { status: "PROCESSING" } });
       const document = await this.prisma.document.findUniqueOrThrow({ where: { id: job.data.documentId } });
       const extraction = await processDocument({ storageKey: document.storageKey, mimeType: document.mimeType, filename: document.filename });
@@ -49,12 +53,18 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
             model: extraction.model,
           },
         });
+        await tx.usageRecord.upsert({
+          where: { jobId: job.data.jobId },
+          create: { organizationId: document.organizationId, jobId: job.data.jobId, inputTokens: extraction.inputTokens, outputTokens: extraction.outputTokens, processingDuration: Date.now() - startedAt },
+          update: { inputTokens: extraction.inputTokens, outputTokens: extraction.outputTokens, processingDuration: Date.now() - startedAt },
+        });
         await tx.processingJob.updateMany({
           where: { id: job.data.jobId, status: "PROCESSING" },
           data: { status: "COMPLETED", errorCode: null, errorMessage: null },
         });
         await tx.document.update({ where: { id: job.data.documentId }, data: { status: "COMPLETED" } });
       });
+      await enqueueWebhookEvents(this.prisma, this.webhookQueue, document.organizationId, "document.processing.completed", { documentId: document.id, jobId: job.data.jobId, status: "COMPLETED" }).catch(() => undefined);
     } catch (error) {
       if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) {
         const message = error instanceof Error ? error.message : "Processing failed";
@@ -70,6 +80,8 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
           });
         });
         await this.failedQueue.add("failed-document", { jobId: job.data.jobId, documentId: job.data.documentId, error: message }, { jobId: `${job.data.jobId}-${Date.now()}`, removeOnComplete: false });
+        const document = await this.prisma.document.findUnique({ where: { id: job.data.documentId }, select: { organizationId: true } });
+        if (document) await enqueueWebhookEvents(this.prisma, this.webhookQueue, document.organizationId, "document.processing.failed", { documentId: job.data.documentId, jobId: job.data.jobId, status: "FAILED", errorCode }).catch(() => undefined);
       }
       throw error;
     }
@@ -77,6 +89,8 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
 
   async onApplicationShutdown() {
     await this.worker.close();
+    await this.webhookWorker.close();
+    await this.webhookQueue.close();
     await this.failedQueue.close();
     await this.prisma.$disconnect();
   }

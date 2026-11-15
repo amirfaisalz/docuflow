@@ -1,3 +1,4 @@
+import { createCipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
@@ -35,11 +36,12 @@ before(async () => {
         data: { invoiceNumber: "INV-2026-001", vendor: "Example Company", invoiceDate: "2026-11-15", total: 1250, currency: "USD" },
         confidence: 0.96,
       };
-    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }] }));
+    response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(payload) }] } }], usageMetadata: { promptTokenCount: 420, candidatesTokenCount: 37 } }));
   });
   await new Promise<void>((resolve) => geminiMock.listen(0, "127.0.0.1", resolve));
   const geminiAddress = geminiMock.address();
   assert.ok(geminiAddress && typeof geminiAddress !== "string");
+  process.env.WEBHOOK_ENCRYPTION_KEY = "docuflow-webhook-test-encryption-key-32";
   process.env.GEMINI_API_KEY = "test-gemini-key";
   process.env.GEMINI_API_BASE_URL = `http://127.0.0.1:${geminiAddress.port}/v1beta`;
   sourceMock = createServer((request, response) => {
@@ -74,6 +76,7 @@ after(async () => {
   await new Promise<void>((resolve, reject) => geminiMock.close((error) => error ? reject(error) : resolve()));
   await new Promise<void>((resolve, reject) => sourceMock.close((error) => error ? reject(error) : resolve()));
   delete process.env.DOCUMENT_SOURCE_BASE_URL;
+  delete process.env.WEBHOOK_ENCRYPTION_KEY;
   delete process.env.GEMINI_API_KEY;
   delete process.env.GEMINI_API_BASE_URL;
   delete process.env.GEMINI_MODEL;
@@ -121,8 +124,99 @@ test("processing worker executes a queued job once and updates persistent status
   assert.equal(extraction?.extractedText, "Invoice INV-2026-001 from Example Company. Total USD 1250.");
   assert.equal(extraction?.confidence, 0.96);
   assert.equal(extraction?.model, "test-model");
+  const usage = await prisma.usageRecord.findUnique({ where: { jobId: record.id } });
+  assert.equal(usage?.inputTokens, 420);
+  assert.equal(usage?.outputTokens, 37);
+  assert.ok((usage?.processingDuration ?? 0) >= 0);
   await new Promise<void>((resolve, reject) => source.close((error) => error ? reject(error) : resolve()));
 });
+
+test("completed processing meters usage once and delivers signed idempotent webhooks", async () => {
+  const received: Array<{ headers: Record<string, string | string[] | undefined>; body: string }> = [];
+  const webhookServer = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    received.push({ headers: request.headers, body: Buffer.concat(chunks).toString() });
+    response.writeHead(204).end();
+  });
+  await new Promise<void>((resolve) => webhookServer.listen(0, "127.0.0.1", resolve));
+  const webhookAddress = webhookServer.address();
+  assert.ok(webhookAddress && typeof webhookAddress !== "string");
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const organization = await prisma.organization.create({ data: { name: `Webhook ${suffix}`, slug: `webhook-${suffix}` } });
+  const endpoint = await prisma.webhookEndpoint.create({
+    data: { organizationId: organization.id, url: `http://127.0.0.1:${webhookAddress.port}/docuflow`, eventTypes: ["document.processing.completed"], encryptedSigningSecret: encryptSecret("whsec_test_signing_secret") },
+  });
+  const document = await prisma.document.create({ data: { organizationId: organization.id, filename: "webhook.pdf", mimeType: "application/pdf", size: 100n, storageKey: `${sourceBaseUrl}/webhook/${suffix}.pdf`, status: "QUEUED" } });
+  const record = await prisma.processingJob.create({ data: { documentId: document.id } });
+  await queue.add("process-document", { jobId: record.id, documentId: document.id }, { jobId: record.id, attempts: 1 });
+
+  const deadline = Date.now() + 10000;
+  let delivery = await prisma.webhookDelivery.findFirst({ where: { endpointId: endpoint.id } });
+  while ((!delivery || delivery.status !== "SENT") && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    delivery = await prisma.webhookDelivery.findFirst({ where: { endpointId: endpoint.id } });
+  }
+  assert.equal(delivery?.status, "SENT");
+  assert.equal(delivery?.eventType, "document.processing.completed");
+  assert.equal(await prisma.usageRecord.count({ where: { jobId: record.id } }), 1);
+  assert.equal(received.length, 1);
+  const payload = JSON.parse(received[0].body) as { id: string; type: string; data: { jobId: string; documentId: string } };
+  assert.equal(received[0].headers["x-docuflow-delivery"], payload.id);
+  assert.equal(payload.type, "document.processing.completed");
+  assert.equal(payload.data.jobId, record.id);
+  assert.equal(payload.data.documentId, document.id);
+  const signatureHeader = String(received[0].headers["x-docuflow-signature"]);
+  const match = /^t=(\d+),v1=([a-f0-9]{64})$/.exec(signatureHeader);
+  assert.ok(match);
+  const expected = createHmac("sha256", "whsec_test_signing_secret").update(`${match![1]}.${payload.id}.${received[0].body}`).digest("hex");
+  assert.equal(match![2], expected);
+  assert.equal((await prisma.webhookDeliveryAttempt.count({ where: { deliveryId: delivery!.id } })), 1);
+  await new Promise<void>((resolve, reject) => webhookServer.close((error) => error ? reject(error) : resolve()));
+});
+
+test("webhook delivery retries after a transient endpoint failure", async () => {
+  let calls = 0;
+  const webhookServer = createServer((_request, response) => {
+    calls += 1;
+    response.writeHead(calls === 1 ? 500 : 202).end();
+  });
+  await new Promise<void>((resolve) => webhookServer.listen(0, "127.0.0.1", resolve));
+  const webhookAddress = webhookServer.address();
+  assert.ok(webhookAddress && typeof webhookAddress !== "string");
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const organization = await prisma.organization.create({ data: { name: `Retry Webhook ${suffix}`, slug: `retry-webhook-${suffix}` } });
+  const endpoint = await prisma.webhookEndpoint.create({
+    data: { organizationId: organization.id, url: `http://127.0.0.1:${webhookAddress.port}/retry`, eventTypes: ["document.processing.completed"], encryptedSigningSecret: encryptSecret("whsec_retry_secret") },
+  });
+  const document = await prisma.document.create({ data: { organizationId: organization.id, filename: "retry-webhook.pdf", mimeType: "application/pdf", size: 100n, storageKey: `${sourceBaseUrl}/retry-webhook/${suffix}.pdf`, status: "QUEUED" } });
+  const record = await prisma.processingJob.create({ data: { documentId: document.id } });
+  await queue.add("process-document", { jobId: record.id, documentId: document.id }, { jobId: record.id, attempts: 1 });
+
+  const deadline = Date.now() + 15000;
+  let delivery = await prisma.webhookDelivery.findFirst({ where: { endpointId: endpoint.id } });
+  while ((!delivery || delivery.status !== "SENT") && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    delivery = await prisma.webhookDelivery.findFirst({ where: { endpointId: endpoint.id } });
+  }
+  assert.equal(delivery?.status, "SENT");
+  assert.equal(delivery?.attempts, 2);
+  assert.equal(calls, 2);
+  const attempts = await prisma.webhookDeliveryAttempt.findMany({ where: { deliveryId: delivery!.id }, orderBy: { attempt: "asc" } });
+  assert.deepEqual(attempts.map(({ attempt, responseStatus, error }) => ({ attempt, responseStatus, error })), [
+    { attempt: 1, responseStatus: 500, error: "Webhook endpoint returned HTTP 500" },
+    { attempt: 2, responseStatus: 202, error: null },
+  ]);
+  await new Promise<void>((resolve, reject) => webhookServer.close((error) => error ? reject(error) : resolve()));
+});
+
+function encryptSecret(secret: string) {
+  const key = createHash("sha256").update(process.env.WEBHOOK_ENCRYPTION_KEY!).digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
+  return `${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${encrypted.toString("base64url")}`;
+}
 
 test("worker records terminal failures after exhausting its attempts", async () => {
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;

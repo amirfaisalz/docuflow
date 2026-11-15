@@ -32,13 +32,16 @@ enum MembershipRole {
 }
 
 model Organization {
-  id          String       @id @default(uuid())
-  name        String
-  slug        String       @unique
-  memberships Membership[]
-  documents   Document[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  id               String            @id @default(uuid())
+  name             String
+  slug             String            @unique
+  memberships      Membership[]
+  documents        Document[]
+  apiKeys          ApiKey[]
+  usageRecords     UsageRecord[]
+  webhookEndpoints WebhookEndpoint[]
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
 }
 
 model User {
@@ -47,8 +50,8 @@ model User {
   name         String?
   passwordHash String
   memberships  Membership[]
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 }
 
 model Membership {
@@ -65,17 +68,17 @@ model Membership {
 }
 
 model Document {
-  id             String         @id @default(uuid())
+  id             String          @id @default(uuid())
   organizationId String
   filename       String
   mimeType       String
   size           BigInt
-  storageKey     String         @unique
-  status         DocumentStatus @default(UPLOADED)
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  storageKey     String          @unique
+  status         DocumentStatus  @default(UPLOADED)
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   jobs           ProcessingJob[]
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
   @@index([organizationId, createdAt])
   @@index([organizationId, status])
@@ -107,4 +110,78 @@ model ExtractionResult {
   job           ProcessingJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
+}
+
+model ApiKey {
+  id              String       @id @default(uuid())
+  organizationId  String
+  createdByUserId String
+  name            String
+  keyPrefix       String       @unique
+  keyHash         String
+  lastUsedAt      DateTime?
+  revokedAt       DateTime?
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt       DateTime     @default(now())
+
+  @@index([organizationId, revokedAt])
+}
+
+model UsageRecord {
+  id                 String       @id @default(uuid())
+  organizationId     String
+  jobId              String       @unique
+  inputTokens        Int          @default(0)
+  outputTokens       Int          @default(0)
+  processingDuration Int          @default(0)
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdAt          DateTime     @default(now())
+
+  @@index([organizationId, createdAt])
+}
+
+model WebhookEndpoint {
+  id                     String            @id @default(uuid())
+  organizationId         String
+  url                    String
+  eventTypes             String[]
+  encryptedSigningSecret String
+  active                 Boolean           @default(true)
+  organization           Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  deliveries             WebhookDelivery[]
+  createdAt              DateTime          @default(now())
+  updatedAt              DateTime          @updatedAt
+
+  @@index([organizationId, active])
+}
+
+model WebhookDelivery {
+  id             String                   @id @default(uuid())
+  endpointId     String
+  eventId        String
+  eventType      String
+  payload        Json
+  status         String                   @default("QUEUED")
+  attempts       Int                      @default(0)
+  responseStatus Int?
+  lastError      String?                  @db.Text
+  endpoint       WebhookEndpoint          @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  history        WebhookDeliveryAttempt[]
+  createdAt      DateTime                 @default(now())
+  updatedAt      DateTime                 @updatedAt
+
+  @@unique([endpointId, eventId])
+  @@index([status, createdAt])
+}
+
+model WebhookDeliveryAttempt {
+  id             String          @id @default(uuid())
+  deliveryId     String
+  attempt        Int
+  responseStatus Int?
+  error          String?         @db.Text
+  delivery       WebhookDelivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  createdAt      DateTime        @default(now())
+
+  @@unique([deliveryId, attempt])
 }

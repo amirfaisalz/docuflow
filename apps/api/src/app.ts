@@ -1,10 +1,11 @@
 import "reflect-metadata";
-import { Body, Controller, Get, Headers, HttpCode, Inject, Injectable, Module, OnApplicationShutdown, Param, Post } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Injectable, Module, OnApplicationShutdown, Param, Post, Query } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
 import { PrismaClient } from "@prisma/client";
 import { AuthTenancyService } from "./auth-tenancy";
 import { DocumentsService } from "./documents";
 import { createProcessingQueue } from "./processing-queue";
+import { DeveloperService } from "./developer";
 
 @Controller("health")
 class HealthController {
@@ -47,11 +48,59 @@ class AuthTenancyController {
   }
 }
 
+@Controller("api/v1")
+class DeveloperController {
+  constructor(
+    @Inject(AuthTenancyService) private readonly auth: AuthTenancyService,
+    @Inject(DeveloperService) private readonly developer: DeveloperService,
+  ) {}
+
+  @Post("api-keys") @HttpCode(201) async createApiKey(@Headers("authorization") authorization: string | undefined, @Body() body: { organizationId?: unknown; name?: unknown }) {
+    const user = await this.auth.authenticate(authorization);
+    return this.developer.createApiKey(user.id, body);
+  }
+
+  @Get("api-keys") async listApiKeys(@Headers("authorization") authorization: string | undefined, @Headers("x-organization-id") organizationId?: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.developer.listApiKeys(user.id, organizationId ?? "");
+  }
+
+  @Delete("api-keys/:id") async revokeApiKey(@Headers("authorization") authorization: string | undefined, @Headers("x-organization-id") organizationId: string | undefined, @Param("id") id: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.developer.revokeApiKey(user.id, organizationId ?? "", id);
+  }
+
+  @Get("usage") async usage(@Headers("authorization") authorization: string | undefined, @Headers("x-organization-id") organizationId: string | undefined, @Query("from") from?: string, @Query("to") to?: string) {
+    if (authorization?.startsWith("Bearer df_live_")) {
+      const credential = await this.developer.authenticateApiKey(authorization);
+      return this.developer.getUsageForApiKey(credential.organizationId, { from, to });
+    }
+    const user = await this.auth.authenticate(authorization);
+    return this.developer.getUsage(user.id, organizationId ?? "", { from, to });
+  }
+
+  @Post("webhooks") @HttpCode(201) async createWebhook(@Headers("authorization") authorization: string | undefined, @Body() body: { organizationId?: unknown; url?: unknown; events?: unknown }) {
+    const user = await this.auth.authenticate(authorization);
+    return this.developer.createWebhook(user.id, body);
+  }
+
+  @Get("webhooks") async listWebhooks(@Headers("authorization") authorization: string | undefined, @Headers("x-organization-id") organizationId?: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.developer.listWebhooks(user.id, organizationId ?? "");
+  }
+
+  @Delete("webhooks/:id") async deleteWebhook(@Headers("authorization") authorization: string | undefined, @Headers("x-organization-id") organizationId: string | undefined, @Param("id") id: string) {
+    const user = await this.auth.authenticate(authorization);
+    return this.developer.deleteWebhook(user.id, organizationId ?? "", id);
+  }
+}
+
 @Controller("api/v1/documents")
 class DocumentsController {
   constructor(
     @Inject(AuthTenancyService) private readonly auth: AuthTenancyService,
     @Inject(DocumentsService) private readonly documents: DocumentsService,
+    @Inject(DeveloperService) private readonly developer: DeveloperService,
   ) {}
 
   @Post("upload-url") @HttpCode(201) async createUpload(@Headers("authorization") authorization: string | undefined, @Body() body: { organizationId?: unknown; filename?: unknown; mimeType?: unknown; size?: unknown }) {
@@ -62,6 +111,11 @@ class DocumentsController {
   @Post(":id/complete-upload") @HttpCode(200) async completeUpload(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
     const user = await this.auth.authenticate(authorization);
     return this.documents.completeUpload(user.id, id);
+  }
+
+  @Post(":id/process") @HttpCode(202) async process(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    const credential = await this.developer.authenticateApiKey(authorization);
+    return this.documents.processDocumentForOrganization(credential.organizationId, id);
   }
 
   @Get() async list(@Headers("authorization") authorization: string | undefined, @Headers("x-organization-id") organizationId?: string) {
@@ -85,9 +139,14 @@ class JobsController {
   constructor(
     @Inject(AuthTenancyService) private readonly auth: AuthTenancyService,
     @Inject(DocumentsService) private readonly documents: DocumentsService,
+    @Inject(DeveloperService) private readonly developer: DeveloperService,
   ) {}
 
   @Get(":id") async get(@Headers("authorization") authorization: string | undefined, @Param("id") id: string) {
+    if (authorization?.startsWith("Bearer df_live_")) {
+      const credential = await this.developer.authenticateApiKey(authorization);
+      return this.documents.getJobForOrganization(credential.organizationId, id);
+    }
     const user = await this.auth.authenticate(authorization);
     return this.documents.getJob(user.id, id);
   }
@@ -105,11 +164,12 @@ class ProcessingQueueLifecycle implements OnApplicationShutdown {
 }
 
 @Module({
-  controllers: [HealthController, AuthTenancyController, DocumentsController, JobsController],
+  controllers: [HealthController, AuthTenancyController, DeveloperController, DocumentsController, JobsController],
   providers: [
     PrismaClient,
     AuthTenancyService,
     DocumentsService,
+    DeveloperService,
     { provide: "PROCESSING_QUEUE", useFactory: createProcessingQueue, inject: [] },
     ProcessingQueueLifecycle,
   ],
