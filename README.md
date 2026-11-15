@@ -608,6 +608,8 @@ Base path:
 
 ### Authentication
 
+Authentication endpoints are public. Registration creates a user with a scrypt password hash; login issues a signed one-hour HS256 bearer token. Authenticated organization endpoints require `Authorization: Bearer <accessToken>`.
+
 | Method | Endpoint         | Description     |
 | ------ | ---------------- | --------------- |
 | POST   | `/auth/register` | Register a user |
@@ -617,13 +619,16 @@ Base path:
 
 ### Organizations
 
+Organization list/create and membership list/add are tenant-scoped. The creator becomes `OWNER`; only `OWNER` and `ADMIN` can add members. Organization details and memberships return `404` to users outside the tenant.
+
 | Method | Endpoint                     | Description         |
 | ------ | ---------------------------- | ------------------- |
 | GET    | `/organizations`             | List organizations  |
 | POST   | `/organizations`             | Create organization |
 | GET    | `/organizations/:id`         | Get organization    |
 | GET    | `/organizations/:id/members` | List members        |
-| POST   | `/organizations/:id/members` | Invite member       |
+| GET    | `/organizations/:id/members` | List members        |
+| POST   | `/organizations/:id/members` | Add member           |
 
 ### Documents
 
@@ -945,7 +950,7 @@ DATABASE_URL=postgresql://postgres:postgres@localhost:5432/docuflow
 REDIS_URL=redis://localhost:6379
 
 # Authentication
-JWT_SECRET=replace-with-a-secure-secret
+JWT_SECRET=replace-with-a-secure-secret-at-least-32-chars
 
 # AWS
 AWS_REGION=ap-southeast-1
@@ -985,7 +990,7 @@ pnpm typecheck
 pnpm build
 ```
 
-API and worker health endpoint tests exercise real HTTP requests against ephemeral local ports.
+API and worker health endpoint tests exercise real HTTP requests against ephemeral local ports. The API authentication and tenant-isolation integration test also uses PostgreSQL; start it with `docker compose up -d postgres` before running `pnpm test`. The API test script supplies a local-only JWT secret and default database URL; set `DATABASE_URL` and `JWT_SECRET` to override them.
 
 ### Start Applications
 
@@ -1311,12 +1316,12 @@ The implementation is divided into milestones to prioritize a working end-to-end
 
 ### Milestone 2: Authentication and Multi-Tenancy
 
-- [ ] Implement authentication.
-- [ ] Create organization management.
-- [ ] Implement organization membership.
-- [ ] Add role-based access control.
-- [ ] Enforce tenant isolation.
-- [ ] Add authorization tests.
+- [x] Implement authentication.
+- [x] Create organization management.
+- [x] Implement organization membership.
+- [x] Add role-based access control.
+- [x] Enforce tenant isolation.
+- [x] Add authorization tests.
 
 ### Milestone 3: Document Upload
 
