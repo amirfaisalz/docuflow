@@ -169,13 +169,18 @@ test("members request a signed Cloudinary upload, confirm verified assets, and l
   await processingQueue.remove(jobs[0].id);
   await prisma.processingJob.update({ where: { id: jobs[0].id }, data: { status: "FAILED", errorCode: "TEST_FAILURE", errorMessage: "retry test" } });
   await prisma.document.update({ where: { id: upload.document.id }, data: { status: "FAILED" } });
+  await prisma.extractionResult.create({ data: { jobId: jobs[0].id, data: { invoiceNumber: "INV-2026-001", total: 1250 }, confidence: 0.94, extractedText: "Invoice INV-2026-001. Total USD 1250.", model: "gemini-2.5-flash" } });
 
   const jobResponse = await request(`/jobs/${jobs[0].id}`, tenant.accessToken);
   assert.equal(jobResponse.status, 200);
-  const jobBody = await jobResponse.json() as { id: string; status: string; errorCode: string };
+  const jobBody = await jobResponse.json() as { id: string; status: string; errorCode: string; result: { data: unknown; confidence: number; extractedText: string; model: string } };
   assert.equal(jobBody.id, jobs[0].id);
   assert.equal(jobBody.status, "FAILED");
   assert.equal(jobBody.errorCode, "TEST_FAILURE");
+  assert.deepEqual(jobBody.result.data, { invoiceNumber: "INV-2026-001", total: 1250 });
+  assert.equal(jobBody.result.confidence, 0.94);
+  assert.equal(jobBody.result.extractedText, "Invoice INV-2026-001. Total USD 1250.");
+  assert.equal(jobBody.result.model, "gemini-2.5-flash");
 
   const retryResponse = await request(`/jobs/${jobs[0].id}/retry`, tenant.accessToken, {});
   assert.equal(retryResponse.status, 202);

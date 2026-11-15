@@ -4,6 +4,7 @@ import { NestFactory } from "@nestjs/core";
 import { Job, Queue, Worker } from "bullmq";
 import { PrismaClient } from "@prisma/client";
 import { createRedisConnection, processingQueueName } from "./processing-queue";
+import { processDocument, ProcessingError } from "./document-processing";
 
 @Controller("health")
 class HealthController {
@@ -29,11 +30,25 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
     if (processing.count === 0) return;
     try {
       await this.prisma.document.update({ where: { id: job.data.documentId }, data: { status: "PROCESSING" } });
-      const forcedFailures = Number(process.env.WORKER_FAIL_ATTEMPTS ?? 0);
-      if (job.attemptsMade < forcedFailures) throw new Error("Configured processing failure");
-
-      // Milestone 4 placeholder: OCR and extraction are implemented in Milestone 5.
+      const document = await this.prisma.document.findUniqueOrThrow({ where: { id: job.data.documentId } });
+      const extraction = await processDocument({ storageKey: document.storageKey, mimeType: document.mimeType, filename: document.filename });
       await this.prisma.$transaction(async (tx) => {
+        await tx.extractionResult.upsert({
+          where: { jobId: job.data.jobId },
+          create: {
+            jobId: job.data.jobId,
+            data: extraction.data,
+            confidence: extraction.confidence ?? null,
+            extractedText: extraction.extractedText,
+            model: extraction.model,
+          },
+          update: {
+            data: extraction.data,
+            confidence: extraction.confidence ?? null,
+            extractedText: extraction.extractedText,
+            model: extraction.model,
+          },
+        });
         await tx.processingJob.updateMany({
           where: { id: job.data.jobId, status: "PROCESSING" },
           data: { status: "COMPLETED", errorCode: null, errorMessage: null },
@@ -43,10 +58,11 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
     } catch (error) {
       if (job.attemptsMade + 1 >= (job.opts.attempts ?? 1)) {
         const message = error instanceof Error ? error.message : "Processing failed";
+        const errorCode = error instanceof ProcessingError ? error.code : "PROCESSING_FAILED";
         await this.prisma.$transaction(async (tx) => {
           await tx.processingJob.updateMany({
             where: { id: job.data.jobId, status: "PROCESSING" },
-            data: { status: "FAILED", errorCode: "PROCESSING_FAILED", errorMessage: message.slice(0, 1000) },
+            data: { status: "FAILED", errorCode, errorMessage: message.slice(0, 1000) },
           });
           await tx.document.updateMany({
             where: { id: job.data.documentId, status: { in: ["QUEUED", "PROCESSING"] } },

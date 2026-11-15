@@ -656,11 +656,11 @@ The response contains a pending document record and a Cloudinary upload URL, API
 
 ### Processing Jobs
 
-After an upload is verified, its document becomes `QUEUED` and exactly one processing job is persisted and enqueued in the `document-processing` BullMQ queue. Jobs use three attempts with exponential backoff. The worker updates job and document lifecycle state in PostgreSQL; Milestone 4 uses a placeholder processor, while OCR and extraction belong to Milestone 5. Exhausted failures are recorded in PostgreSQL and copied to the `document-processing-failed` BullMQ queue. A failed job can be retried through the API, and its persisted error information is available in the job status response.
+After an upload is verified, its document becomes `QUEUED` and exactly one processing job is persisted and enqueued in the `document-processing` BullMQ queue. Jobs use three attempts with exponential backoff. The worker downloads private documents from Cloudinary, sends PDF/image bytes to Gemini (which performs OCR as needed), validates structured invoice output with Zod, and persists extracted text, data, confidence, and model in PostgreSQL. Exhausted failures are recorded in PostgreSQL and copied to the `document-processing-failed` BullMQ queue. A failed job can be retried through the API, and its persisted error information is available in the job status response.
 
 | Method | Endpoint              | Description           |
 | ------ | --------------------- | --------------------- |
-| GET    | `/jobs/:id`           | Get job status        |
+| GET    | `/jobs/:id`           | Get job status and extraction result |
 | GET    | `/documents/:id/jobs` | List document jobs    |
 | POST   | `/jobs/:id/retry`     | Retry failed job      |
 
@@ -696,13 +696,13 @@ Response:
 
 The response confirms job creation, not processing completion.
 
-Clients should poll the job status endpoint or subscribe to webhook notifications.
+Clients can poll `GET /api/v1/jobs/:id`; the response includes `result: { extractedText, data, confidence, model }` after successful processing, or `result: null` beforehand. Data is invoice-shaped: `invoiceNumber`, `vendor`, `invoiceDate` (ISO date), `total`, and `currency`; unknown values are `null`. Extraction results remain available alongside job status. The worker requires `GEMINI_API_KEY`; configure `GEMINI_MODEL` to select another supported Gemini model. `GEMINI_API_BASE_URL` and `GEMINI_TIMEOUT_MS` are optional overrides.
 
 ---
 
 ## 10. AI Extraction Pipeline
 
-The extraction pipeline converts document text into structured, schema-compliant data.
+The extraction pipeline downloads private PDF/image assets from Cloudinary and sends the bytes directly to Gemini multimodal input for document text OCR and invoice extraction. It validates responses against a strict Zod invoice schema before persisting both extracted text and structured fields. The worker requires `GEMINI_API_KEY`; configure optional `GEMINI_MODEL`, `GEMINI_API_BASE_URL`, and `GEMINI_TIMEOUT_MS` for model selection, compatible proxies, and timeouts.
 
 ### Example Use Case: Invoice Extraction
 
@@ -980,15 +980,20 @@ AWS_ACCESS_KEY_ID=
 AWS_SECRET_ACCESS_KEY=
 
 # AI Provider
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-2.5-flash
+# Optional: override the Gemini API for proxies and local integration tests.
+GEMINI_API_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_TIMEOUT_MS=60000
+# Optional: set when using a compatible signed-download proxy rather than Cloudinary SDK URLs.
+DOCUMENT_SOURCE_BASE_URL=
 
 # Application
 WEB_URL=http://localhost:3000
 API_URL=http://localhost:4000
 ```
 
-Never commit `.env` or real credentials to version control.
+Copy `.env.example` to `.env`, add your Gemini API key and Cloudinary credentials, and never commit `.env` or real credentials to version control.
 
 ### Start Infrastructure
 
@@ -1011,7 +1016,7 @@ pnpm typecheck
 pnpm build
 ```
 
-API and worker health endpoint tests exercise real HTTP requests against ephemeral local ports. API authentication, tenant-isolation, and document upload integration tests use PostgreSQL; start it with `docker compose up -d postgres` before running `pnpm test`. The document tests run against a local Cloudinary-compatible HTTP server and do not require a Cloudinary account. The API test script supplies a local-only JWT secret and default database URL; set `DATABASE_URL` and `JWT_SECRET` to override them.
+API and worker health endpoint tests exercise real HTTP requests against ephemeral local ports. API authentication, tenant-isolation, and document upload integration tests use PostgreSQL; start it with `docker compose up -d postgres` before running `pnpm test`. The document tests run against a local Cloudinary-compatible HTTP server and do not require a Cloudinary account. Worker integration tests use real PostgreSQL and Redis plus local HTTP servers for document download and Gemini responses, so they do not require a Gemini key. The API test script supplies a local-only JWT secret and default database URL; set `DATABASE_URL` and `JWT_SECRET` to override them.
 
 ### Start Applications
 
@@ -1366,13 +1371,13 @@ The implementation is divided into milestones to prioritize a working end-to-end
 
 ### Milestone 5: OCR and AI Extraction
 
-- [ ] Integrate OCR.
-- [ ] Extract text from PDF documents.
-- [ ] Integrate an LLM provider.
-- [ ] Implement structured extraction.
-- [ ] Add Zod schema validation.
-- [ ] Handle invalid model responses.
-- [ ] Persist extraction results.
+- [x] Integrate OCR through Gemini multimodal document input.
+- [x] Extract text from PDF documents and images.
+- [x] Integrate Gemini as the LLM provider.
+- [x] Implement structured invoice extraction.
+- [x] Add Zod schema validation.
+- [x] Handle provider errors and invalid model responses.
+- [x] Persist extraction results.
 
 ### Milestone 6: Developer Experience
 

@@ -98,10 +98,13 @@ model ProcessingJob {
 }
 
 model ExtractionResult {
-  id         String        @id @default(uuid())
-  jobId      String        @unique
-  data       Json
-  confidence Float?
-  job        ProcessingJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  createdAt  DateTime      @default(now())
+  id            String        @id @default(uuid())
+  jobId         String        @unique
+  data          Json
+  confidence    Float?
+  extractedText String        @db.Text
+  model         String
+  job           ProcessingJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 }

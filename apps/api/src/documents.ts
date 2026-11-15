@@ -151,7 +151,10 @@ export class DocumentsService {
   }
 
   async getJob(userId: string, jobId: string) {
-    const job = await this.prisma.processingJob.findFirst({ where: { id: jobId, document: { organization: { memberships: { some: { userId } } } } } });
+    const job = await this.prisma.processingJob.findFirst({
+      where: { id: jobId, document: { organization: { memberships: { some: { userId } } } } },
+      include: { result: true },
+    });
     if (!job) throw new NotFoundException("Processing job not found");
     return job;
   }
