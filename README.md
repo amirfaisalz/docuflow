@@ -8,6 +8,51 @@ Upload documents, extract structured data with AI, review the results, and integ
 
 ---
 
+## Quick Start — Running the Dev Server
+
+Prerequisites: Node.js LTS, pnpm, Docker, and Docker Compose.
+
+```bash
+# 1. Install workspace dependencies
+pnpm install
+
+# 2. Create your local environment file and fill in the secrets
+cp .env.example .env
+
+# 3. Start PostgreSQL and Redis
+docker compose up -d postgres redis
+
+# 4. Export the environment into your shell
+set -a
+source .env
+set +a
+
+# 5. Create the Prisma client, apply migrations, start every service in watch mode
+pnpm db:generate
+pnpm db:migrate
+pnpm dev
+```
+
+The applications read configuration from `process.env`; `.env` is **not** loaded automatically, so step 4 matters — the migration commands need `DATABASE_URL` too. `pnpm dev` builds the compiled workspace packages first (`predev`), then starts:
+
+| Service       | URL                                | Notes                           |
+| ------------- | ---------------------------------- | ------------------------------- |
+| Web           | http://localhost:3000              | Next.js landing page            |
+| API           | http://localhost:4000              | `PORT` overrides the default    |
+| API readiness | http://localhost:4000/health/ready | `200` when Postgres and Redis are up |
+| Worker        | http://localhost:4001/health       | Readiness at `/health/ready`    |
+
+Confirm everything is wired up:
+
+```bash
+curl -s http://localhost:4000/health/ready
+curl -s http://localhost:4001/health/ready
+```
+
+Stop with `Ctrl+C`. Full details — per-service commands, port overrides, migration flow, verification script, and troubleshooting — are in [§14 Local Development](#14-local-development).
+
+---
+
 ## 1. Overview
 
 DocuFlow AI is a multi-tenant document processing platform that transforms unstructured documents into validated, structured data using OCR and Large Language Models (LLMs).
@@ -986,7 +1031,7 @@ Example configuration:
 NODE_ENV=development
 
 # Database
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/docuflow
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/docuflow?schema=public
 
 # Redis
 REDIS_URL=redis://localhost:6379
@@ -1029,7 +1074,11 @@ Copy `.env.example` to `.env`, add your Gemini API key and Cloudinary credential
 docker compose up -d postgres redis
 ```
 
+Compose maps PostgreSQL and Redis to host ports `5432` and `6379` by default. If you override `POSTGRES_PORT` or `REDIS_PORT`, update the ports in `DATABASE_URL` and `REDIS_URL` to match.
+
 ### Run Database Migrations
+
+Export `.env` first (see [Start Applications](#start-applications)) so `DATABASE_URL` is visible to Prisma, then:
 
 ```bash
 pnpm db:generate
@@ -1050,20 +1099,93 @@ API and worker tests exercise real HTTP requests against ephemeral local ports. 
 
 ### Start Applications
 
+Start PostgreSQL and Redis and apply migrations first (`docker compose up -d postgres redis`, `pnpm db:generate`, `pnpm db:migrate`).
+
+The services read configuration from `process.env`; **`.env` is not loaded automatically**. Export it into your shell before starting anything (bash/zsh):
+
+```bash
+set -a
+source .env
+set +a
+```
+
+Without this step the API falls back to the defaults in the code (`redis://localhost:6379`, no Cloudinary or Gemini credentials), so uploads return `503` and processing fails.
+
+#### Run all services
+
 ```bash
 pnpm dev
 ```
 
-Expected local services:
+`predev` builds the compiled workspace packages (`@docuflow/observability` and `@docuflow/shared`), then Turborepo starts every `dev` task in watch mode. The API and worker use `tsx watch`; the web app uses `next dev`.
 
-| Service    | URL                          |
-| ---------- | ---------------------------- |
-| Web        | http://localhost:3000        |
-| API        | http://localhost:4000        |
-| API Health | http://localhost:4000/health |
-| Worker     | http://localhost:4001/health |
+| Service       | URL                                | Notes                              |
+| ------------- | ---------------------------------- | ---------------------------------- |
+| Web           | http://localhost:3000              | Next.js landing page               |
+| API           | http://localhost:4000              | `PORT` overrides the default       |
+| API liveness  | http://localhost:4000/health       | Always `200` while running         |
+| API readiness | http://localhost:4000/health/ready | `503` until dependencies are up    |
+| Worker        | http://localhost:4001/health       | Readiness at `/health/ready`       |
 
-These commands and endpoints should be aligned with the actual scripts and application configuration during implementation.
+A cold start takes roughly 10 seconds before all three services answer.
+
+#### Run one service
+
+Build the shared packages once, then start the service you need:
+
+```bash
+pnpm build:packages
+
+pnpm --filter @docuflow/api dev
+pnpm --filter @docuflow/worker dev
+pnpm --filter @docuflow/web dev
+```
+
+Both API and worker read `PORT`, so give them different values if you run them together outside `pnpm dev`:
+
+```bash
+PORT=4000 pnpm --filter @docuflow/api dev
+PORT=4001 pnpm --filter @docuflow/worker dev
+```
+
+#### Verify the dev server
+
+```bash
+curl -s http://localhost:4000/health
+curl -s http://localhost:4000/health/ready
+curl -s http://localhost:4001/health/ready
+curl -s http://localhost:3000/ | head -3
+```
+
+Then confirm the API can reach PostgreSQL and Cloudinary:
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:4000/api/v1/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"email":"dev@example.test","password":"correct-horse-battery-staple"}' | jq -r .accessToken)
+
+ORG=$(curl -s -X POST http://localhost:4000/api/v1/organizations \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"name":"Local Dev"}' | jq -r .id)
+
+curl -s -X POST http://localhost:4000/api/v1/documents/upload-url \
+  -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d "{\"organizationId\":\"$ORG\",\"filename\":\"invoice.pdf\",\"mimeType\":\"application/pdf\",\"size\":1024}" | jq '.upload.cloudName, .upload.signature'
+```
+
+A `201` with a Cloudinary cloud name and signature means the database, queue, and storage configuration are wired up. Stop the dev server with `Ctrl+C`.
+
+#### Troubleshooting
+
+- **`EADDRINUSE`** — another process owns 3000/4000/4001. Stop it or start the service with a different port.
+- **`Bind for 0.0.0.0:5432 failed: port is already allocated`** — another PostgreSQL (or Redis on 6379) is running on the host. Pick different host ports and point the app at them: `POSTGRES_PORT=55433 REDIS_PORT=56379 docker compose up -d postgres redis`, then set `DATABASE_URL=postgresql://postgres:postgres@localhost:55433/docuflow?schema=public` and `REDIS_URL=redis://localhost:56379` in `.env`.
+- **`503` from `/health/ready`** — read the `checks` object: `database: down` means PostgreSQL is unreachable, `redis: down` means Redis is unreachable. Check `docker compose ps` and the ports in `DATABASE_URL`/`REDIS_URL`.
+- **Prisma errors on startup** — run `pnpm db:generate && pnpm db:migrate`.
+- **Uploads return `503 Cloudinary storage is not configured`** — the shell running the API has no Cloudinary variables; export `.env` as shown above.
+- **Edits in `packages/shared` or `packages/observability` do not take effect** — API and worker consume their compiled `dist` output. Rerun `pnpm build:packages` (or restart `pnpm dev`, whose `predev` rebuilds them). Their own tests and the web app do not need this step.
+- **`.env` edits do not apply** — nothing reloads the file at runtime; restart the dev server after exporting it again.
 
 ---
 

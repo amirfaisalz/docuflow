@@ -5,8 +5,9 @@
   "packageManager": "pnpm@10.26.1",
   "scripts": {
     "dev": "turbo dev",
-    "predev": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build",
+    "predev": "pnpm build:packages",
     "build": "turbo build",
+    "build:packages": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "test": "turbo test --continue",
