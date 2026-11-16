@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Prisma CLI only reads .env from its own working directory (packages/database)
-// and the schema directory. This workspace keeps a single .env at the repo root,
-// so load that first without overriding anything already exported in the shell.
+// This workspace keeps a single .env at the repo root. Load it before running
+// tools that do not read it themselves (Prisma CLI, turbo), without overriding
+// values already exported in the shell.
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -37,7 +37,7 @@ if (!process.env.DATABASE_URL) {
 
 const [command, ...args] = process.argv.slice(2);
 if (!command) {
-  console.error("Usage: node scripts/load-root-env.mjs <command> [args...]");
+  console.error("Usage: node scripts/run-with-env.mjs <command> [args...]");
   process.exit(1);
 }
 

@@ -4,7 +4,7 @@
   "private": true,
   "packageManager": "pnpm@10.26.1",
   "scripts": {
-    "dev": "turbo dev",
+    "dev": "node scripts/run-with-env.mjs turbo dev",
     "predev": "pnpm build:packages",
     "build": "turbo build",
     "build:packages": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build",

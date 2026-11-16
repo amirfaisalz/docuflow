@@ -3,10 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "db:generate": "node scripts/load-root-env.mjs prisma generate",
-    "db:migrate": "node scripts/load-root-env.mjs prisma migrate dev",
-    "db:studio": "node scripts/load-root-env.mjs prisma studio",
-    "db:check": "node scripts/load-root-env.mjs prisma migrate status",
+    "db:generate": "node ../../scripts/run-with-env.mjs prisma generate",
+    "db:migrate": "node ../../scripts/run-with-env.mjs prisma migrate dev",
+    "db:studio": "node ../../scripts/run-with-env.mjs prisma studio",
+    "db:check": "node ../../scripts/run-with-env.mjs prisma migrate status",
     "build": "prisma generate",
     "lint": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/docuflow} prisma validate",
     "typecheck": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/docuflow} prisma validate"

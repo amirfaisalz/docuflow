@@ -22,22 +22,17 @@ cp .env.example .env
 # 3. Start PostgreSQL and Redis
 docker compose up -d postgres redis
 
-# 4. Export the environment into your shell
-set -a
-source .env
-set +a
-
-# 5. Create the Prisma client, apply migrations, start every service in watch mode
+# 4. Create the Prisma client, apply migrations, start every service in watch mode
 pnpm db:generate
 pnpm db:migrate
 pnpm dev
 ```
 
-The applications read configuration from `process.env`; `.env` is **not** loaded automatically, so step 4 matters — the migration commands need `DATABASE_URL` too. `pnpm dev` builds the compiled workspace packages first (`predev`), then starts:
+`pnpm dev` and the `pnpm db:*` scripts load the repo-root `.env` automatically, so you do not need to export it. Values already exported in your shell take precedence. `pnpm dev` builds the compiled workspace packages first (`predev`), then starts:
 
 | Service       | URL                                | Notes                           |
 | ------------- | ---------------------------------- | ------------------------------- |
-| Web           | http://localhost:3000              | Next.js landing page            |
+| Web           | http://localhost:3000              | Dashboard (redirects to `/login`) |
 | API           | http://localhost:4000              | `PORT` overrides the default    |
 | API readiness | http://localhost:4000/health/ready | `200` when Postgres and Redis are up |
 | Worker        | http://localhost:4001/health       | Readiness at `/health/ready`    |
@@ -1099,7 +1094,7 @@ Prisma Studio serves its UI at http://localhost:5555 and reads `DATABASE_URL` fr
 pnpm db:check
 ```
 
-That command prints the resolved host, port, and database plus whether migrations are applied. If you mapped PostgreSQL to a non-default host port (for example `POSTGRES_PORT=55433` because another project already owns 5432), `DATABASE_URL` must use the same port. If 5555 is already taken, run `pnpm --filter @docuflow/database exec node scripts/load-root-env.mjs prisma studio --port 5556`.
+That command prints the resolved host, port, and database plus whether migrations are applied. If you mapped PostgreSQL to a non-default host port (for example `POSTGRES_PORT=55433` because another project already owns 5432), `DATABASE_URL` must use the same port. If 5555 is already taken, run `pnpm --filter @docuflow/database exec node ../../scripts/run-with-env.mjs prisma studio --port 5556`.
 
 ### Run Tests and Checks
 
@@ -1117,15 +1112,15 @@ API and worker tests exercise real HTTP requests against ephemeral local ports. 
 
 Start PostgreSQL and Redis and apply migrations first (`docker compose up -d postgres redis`, `pnpm db:generate`, `pnpm db:migrate`).
 
-The services read configuration from `process.env`; **`.env` is not loaded automatically**. Export it into your shell before starting anything (bash/zsh):
+`pnpm dev` loads the repo-root `.env` before starting Turborepo, and the `pnpm db:*` scripts do the same for Prisma. Values already exported in your shell take precedence, so you can still override a single variable without editing the file:
 
 ```bash
-set -a
-source .env
-set +a
+set -a; source .env; set +a   # optional override for this shell
+export GEMINI_MODEL=gemini-2.5-pro
+pnpm dev
 ```
 
-Without this step the API falls back to the defaults in the code (`redis://localhost:6379`, no Cloudinary or Gemini credentials), so uploads return `503` and processing fails.
+Running a service directly (`pnpm --filter @docuflow/api dev`) bypasses the wrapper; export `.env` first in that case. Without `DATABASE_URL` the API fails readiness with `database: down` and requests that touch the database return `500`.
 
 #### Run all services
 
