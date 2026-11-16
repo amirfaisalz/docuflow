@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, PrismaClient } from "@docuflow/database";
 import { SpanStatusCode, trace } from "@opentelemetry/api";
 import { createLogger } from "@docuflow/observability";
 import { isSafeWebhookUrl } from "@docuflow/shared";

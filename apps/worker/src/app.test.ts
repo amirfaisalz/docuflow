@@ -4,13 +4,13 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { INestApplication } from "@nestjs/common";
 import { Queue } from "bullmq";
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "@docuflow/database";
 import { createWorkerApp } from "./app";
 import { createRedisConnection, processingQueueName } from "./processing-queue";
 
 let app: INestApplication;
 let baseUrl: string;
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const queue = new Queue(processingQueueName, { connection: createRedisConnection() });
 const failedQueue = new Queue(`${processingQueueName}-failed`, { connection: createRedisConnection() });
 let geminiMock: ReturnType<typeof createServer>;

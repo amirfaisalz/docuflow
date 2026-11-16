@@ -7,7 +7,7 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from "@nestjs/common";
-import { DocumentStatus, MembershipRole, PrismaClient } from "@prisma/client";
+import { DocumentStatus, MembershipRole, PrismaClient } from "@docuflow/database";
 import { Queue } from "bullmq";
 import { createRedisConnection } from "./processing-queue";
 

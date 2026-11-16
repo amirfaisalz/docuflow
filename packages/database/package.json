@@ -7,14 +7,19 @@
     "db:migrate": "node ../../scripts/run-with-env.mjs prisma migrate dev",
     "db:studio": "node ../../scripts/run-with-env.mjs prisma studio",
     "db:check": "node ../../scripts/run-with-env.mjs prisma migrate status",
-    "build": "prisma generate",
-    "lint": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/docuflow} prisma validate",
-    "typecheck": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/docuflow} prisma validate"
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "lint": "prisma generate && prisma validate",
+    "typecheck": "prisma generate && prisma validate && tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@prisma/client": "^6.19.0"
+    "@prisma/adapter-pg": "^7.10.1",
+    "@prisma/client": "^7.10.1"
   },
   "devDependencies": {
-    "prisma": "^6.19.0"
-  }
+    "@types/node": "^26.6.6",
+    "prisma": "^7.10.1",
+    "typescript": "^7.0.2"
+  },
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts"
 }

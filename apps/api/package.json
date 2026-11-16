@@ -7,25 +7,24 @@
     "build": "tsc -p tsconfig.json",
     "lint": "tsc --noEmit -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "pretest": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build",
-    "test": "PROCESSING_QUEUE_NAME=${PROCESSING_QUEUE_NAME:-docuflow-api-test} JWT_SECRET=${JWT_SECRET:-docuflow-local-test-secret-change-me-32chars} DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/docuflow?schema=public} tsx --test src/**/*.test.ts"
+    "pretest": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build && pnpm --filter @docuflow/database build",
+    "test": "PROCESSING_QUEUE_NAME=${PROCESSING_QUEUE_NAME:-docuflow-api-test} JWT_SECRET=${JWT_SECRET:-docuflow-local-test-secret-change-me-32chars} node ../../scripts/run-with-env.mjs tsx --test src/**/*.test.ts"
   },
   "dependencies": {
     "@docuflow/database": "workspace:*",
     "@docuflow/observability": "workspace:*",
     "@docuflow/shared": "workspace:*",
-    "@nestjs/common": "^11.1.9",
-    "@nestjs/core": "^11.1.9",
-    "@nestjs/platform-express": "^11.1.9",
+    "@nestjs/common": "^12.5.0",
+    "@nestjs/core": "^12.5.0",
+    "@nestjs/platform-express": "^12.5.0",
     "@opentelemetry/api": "^1.10.0",
-    "@prisma/client": "^6.19.0",
     "bullmq": "^6.7.6",
     "ioredis": "^6.0.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
-    "tsx": "^4.20.6"
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15"
   }
 }

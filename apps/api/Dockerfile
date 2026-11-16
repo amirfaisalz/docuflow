@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1.7
-FROM node:22-alpine AS base
-RUN corepack enable && apk add --no-cache openssl libc6-compat
+FROM node:26-alpine AS base
+# Node.js 26 no longer ships Corepack, so install it before enabling pnpm.
+RUN apk add --no-cache openssl libc6-compat \
+  && npm install -g corepack@latest \
+  && corepack enable
 WORKDIR /repo
 
 FROM base AS dependencies
@@ -14,6 +17,8 @@ COPY packages/observability/package.json packages/observability/
 RUN pnpm install --frozen-lockfile
 
 FROM dependencies AS build
+# prisma generate needs a value for the datasource, but does not connect.
+ENV DATABASE_URL=postgresql://postgres:postgres@localhost:5432/docuflow
 COPY . .
 RUN pnpm --filter @docuflow/database build \
   && pnpm --filter @docuflow/observability build \

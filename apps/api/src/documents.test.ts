@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { INestApplication } from "@nestjs/common";
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "@docuflow/database";
 import { Queue } from "bullmq";
 import { createApiApp } from "./app";
 import { createRedisConnection, processingQueueName } from "./processing-queue";
@@ -16,7 +16,7 @@ let cloudinaryUrl: string;
 let app: INestApplication;
 let baseUrl: string;
 const cloudAssets = new Map<string, { bytes: number; format: string; resource_type: string; public_id: string }>;
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const processingQueue = new Queue(processingQueueName, { connection: createRedisConnection() });
 
 before(async () => {

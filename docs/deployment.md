@@ -13,9 +13,9 @@ builds images and deploys them.
 
 - AWS account and permissions to create VPC, ECS, RDS, ElastiCache, S3, ECR,
   IAM, ALB, Secrets Manager, and CloudWatch resources.
-- Terraform 1.9 or newer.
+- Terraform 1.17 or newer.
 - AWS CLI v2 and Docker.
-- pnpm 10 and Node.js 22 for local verification.
+- pnpm 12 and Node.js 26 for local verification.
 - Optional: an ACM certificate and DNS record for the API host.
 
 ## 1. Bootstrap Remote State

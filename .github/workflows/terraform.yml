@@ -32,10 +32,10 @@ jobs:
     name: Format and validate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: 1.9.8
+          terraform_version: 1.17.2
       - run: terraform fmt -check -recursive
         working-directory: infra/terraform
       - run: terraform init -backend=false
@@ -53,11 +53,11 @@ jobs:
       run:
         working-directory: infra/terraform/envs/production
     steps:
-      - uses: actions/checkout@v4
-      - uses: hashicorp/setup-terraform@v3
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
         with:
-          terraform_version: 1.9.8
-      - uses: aws-actions/configure-aws-credentials@v4
+          terraform_version: 1.17.2
+      - uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_TERRAFORM_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}

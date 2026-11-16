@@ -1,7 +1,7 @@
 import { after, before, test } from "node:test";
 import assert from "node:assert/strict";
 import type { INestApplication } from "@nestjs/common";
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient } from "@docuflow/database";
 import { Queue } from "bullmq";
 import { createApiApp } from "./app";
 import { createRedisConnection, processingQueueName } from "./processing-queue";
@@ -10,7 +10,7 @@ let app: INestApplication;
 let baseUrl: string;
 let organizationId: string;
 let accessToken: string;
-const prisma = new PrismaClient();
+const prisma = createPrismaClient();
 const queue = new Queue(processingQueueName, { connection: createRedisConnection() });
 
 before(async () => {

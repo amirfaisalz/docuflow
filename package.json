@@ -2,25 +2,25 @@
   "name": "docuflow-ai",
   "version": "0.1.0",
   "private": true,
-  "packageManager": "pnpm@10.26.1",
+  "packageManager": "pnpm@12.21.0",
   "scripts": {
     "dev": "node scripts/run-with-env.mjs turbo dev",
     "predev": "pnpm build:packages",
     "build": "turbo build",
-    "build:packages": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build",
+    "build:packages": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build && pnpm --filter @docuflow/database build",
     "lint": "turbo lint",
     "typecheck": "turbo typecheck",
     "test": "turbo test --continue",
-    "test:e2e": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build && TSX_TSCONFIG_PATH=tsconfig.e2e.json tsx --test tests/e2e/*.test.ts",
+    "test:e2e": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build && pnpm --filter @docuflow/database build && TSX_TSCONFIG_PATH=tsconfig.e2e.json node scripts/run-with-env.mjs tsx --test tests/e2e/*.test.ts",
     "db:generate": "pnpm --filter @docuflow/database db:generate",
     "db:migrate": "pnpm --filter @docuflow/database db:migrate",
     "db:studio": "pnpm --filter @docuflow/database db:studio",
     "db:check": "pnpm --filter @docuflow/database db:check"
   },
   "devDependencies": {
-    "@types/node": "^24.10.1",
-    "tsx": "^4.20.6",
-    "turbo": "^2.5.8",
-    "typescript": "^5.9.3"
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "turbo": "^2.11.11",
+    "typescript": "^7.0.2"
   }
 }

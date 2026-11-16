@@ -1,7 +1,7 @@
 import "reflect-metadata";
 import { Body, Controller, Delete, Get, Headers, HttpCode, Inject, Injectable, Module, OnApplicationShutdown, Param, Post, Query, Res } from "@nestjs/common";
 import { NestFactory } from "@nestjs/core";
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient, PrismaClient } from "@docuflow/database";
 import { AuthTenancyService } from "./auth-tenancy";
 import { DocumentsService } from "./documents";
 import { createProcessingQueue } from "./processing-queue";
@@ -182,7 +182,7 @@ class ProcessingQueueLifecycle implements OnApplicationShutdown {
 @Module({
   controllers: [HealthController, AuthTenancyController, DeveloperController, DocumentsController, JobsController],
   providers: [
-    PrismaClient,
+    { provide: PrismaClient, useFactory: () => createPrismaClient() },
     AuthTenancyService,
     DocumentsService,
     DeveloperService,

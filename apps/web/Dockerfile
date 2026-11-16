@@ -1,6 +1,9 @@
 # syntax=docker/dockerfile:1.7
-FROM node:22-alpine AS base
-RUN corepack enable && apk add --no-cache openssl libc6-compat
+FROM node:26-alpine AS base
+# Node.js 26 no longer ships Corepack, so install it before enabling pnpm.
+RUN apk add --no-cache openssl libc6-compat \
+  && npm install -g corepack@latest \
+  && corepack enable
 WORKDIR /repo
 
 FROM base AS dependencies

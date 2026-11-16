@@ -9,7 +9,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from "@nestjs/common";
-import { MembershipRole, PrismaClient } from "@prisma/client";
+import { MembershipRole, PrismaClient } from "@docuflow/database";
 
 const scrypt = promisify(scryptCallback);
 const tokenLifetimeSeconds = 60 * 60;

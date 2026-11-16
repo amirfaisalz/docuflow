@@ -1,5 +1,5 @@
 import { Inject, Injectable, OnApplicationShutdown } from "@nestjs/common";
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "@docuflow/database";
 import { createReadinessReport, type ReadinessReport } from "@docuflow/observability";
 import Redis from "ioredis";
 import { createRedisConnection } from "./processing-queue";

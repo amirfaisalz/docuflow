@@ -4,7 +4,7 @@ import { NestFactory } from "@nestjs/core";
 import { trace, SpanStatusCode } from "@opentelemetry/api";
 import { createLogger, errorFields } from "@docuflow/observability";
 import { Job, Queue, Worker } from "bullmq";
-import { PrismaClient } from "@prisma/client";
+import { createPrismaClient, PrismaClient } from "@docuflow/database";
 import { createRedisConnection, processingQueueName } from "./processing-queue";
 import { processDocument, ProcessingError } from "./document-processing";
 import { createWebhookWorker, enqueueWebhookEvents, webhookQueueName } from "./webhooks";
@@ -38,7 +38,7 @@ class HealthController {
 
 @Injectable()
 class ProcessingWorkerLifecycle implements OnApplicationShutdown {
-  private readonly prisma = new PrismaClient();
+  private readonly prisma = createPrismaClient();
   private readonly failedQueue = new Queue(`${processingQueueName}-failed`, { connection: createRedisConnection() });
   private readonly webhookQueue = new Queue(webhookQueueName, { connection: createRedisConnection() });
   private readonly webhookWorker = createWebhookWorker(this.prisma);
@@ -188,7 +188,7 @@ class ProcessingWorkerLifecycle implements OnApplicationShutdown {
   }
 }
 
-@Module({ controllers: [HealthController], providers: [PrismaClient, HealthService, ProcessingWorkerLifecycle] })
+@Module({ controllers: [HealthController], providers: [{ provide: PrismaClient, useFactory: () => createPrismaClient() }, HealthService, ProcessingWorkerLifecycle] })
 class WorkerModule {}
 
 export async function createWorkerApp() {

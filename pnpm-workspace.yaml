@@ -1,3 +1,20 @@
 packages:
   - "apps/*"
   - "packages/*"
+
+# pnpm 11+ quarantines packages published less than a day ago. These three
+# vetted lock-file entries were newer than that window when the upgrade ran,
+# so they are allowed explicitly instead of disabling the policy.
+minimumReleaseAgeExclude:
+  - "@tokenizer/inflate@0.6.1"
+  - "sql-escaper@1.7.0"
+  - "systeminformation@5.33.23"
+
+# pnpm 11+ blocks dependency build scripts unless they are declared here.
+allowBuilds:
+  "@prisma/engines": true
+  esbuild: true
+  prisma: true
+  # Native accelerators that ship pure-JS fallbacks; building is unnecessary.
+  msgpackr-extract: false
+  protobufjs: false

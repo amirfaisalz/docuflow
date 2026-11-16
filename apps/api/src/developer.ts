@@ -1,6 +1,6 @@
 import { createCipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { BadRequestException, ForbiddenException, Inject, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
-import { MembershipRole, PrismaClient } from "@prisma/client";
+import { MembershipRole, PrismaClient } from "@docuflow/database";
 import { isSafeWebhookUrl } from "@docuflow/shared";
 
 const keyPrefixLength = 16;
