@@ -960,7 +960,8 @@ docuflow-ai/
 │
 ├── docs/
 │   ├── architecture.md
-│   └── deployment.md
+│   ├── deployment.md
+│   └── future-development.md
 │
 ├── docker-compose.yml
 ├── turbo.json
@@ -1545,83 +1546,13 @@ The platform should track usage per organization and provide visibility into exp
 
 ---
 
-## 20. Development Roadmap
+## 20. Roadmap & Future Development
 
-The implementation is divided into milestones to prioritize a working end-to-end system before adding advanced features.
+DocuFlow AI was developed through seven structured milestones covering workspace foundations, multi-tenant RBAC, authenticated document storage, asynchronous BullMQ processing, multimodal Gemini OCR & structured extraction, developer API keys & webhooks, and AWS production infrastructure with OpenTelemetry observability.
 
-### Milestone 1: Foundation
+For the complete development history, implemented milestone details, and planned future capabilities (such as multi-provider OCR abstractions, human-in-the-loop review interfaces, custom extraction templates, and autoscaling workers), see:
 
-- [x] Initialize pnpm workspace.
-- [x] Configure Turborepo.
-- [x] Create Next.js application.
-- [x] Create NestJS API.
-- [x] Create worker application.
-- [x] Configure shared TypeScript packages.
-- [x] Configure PostgreSQL and Prisma.
-- [x] Add Docker Compose.
-- [x] Add health check endpoints.
-
-### Milestone 2: Authentication and Multi-Tenancy
-
-- [x] Implement authentication.
-- [x] Create organization management.
-- [x] Implement organization membership.
-- [x] Add role-based access control.
-- [x] Enforce tenant isolation.
-- [x] Add authorization tests.
-
-### Milestone 3: Document Upload
-
-- [x] Implement document metadata.
-- [x] Configure Cloudinary document storage.
-- [x] Implement signed upload parameters.
-- [x] Validate file types and sizes.
-- [x] Implement upload confirmation.
-- [x] Add document listing and details.
-
-### Milestone 4: Background Processing
-
-- [x] Configure Redis.
-- [x] Configure BullMQ.
-- [x] Create document processing queues.
-- [x] Implement worker lifecycle.
-- [x] Add job status tracking.
-- [x] Implement retry and backoff.
-- [x] Implement idempotent processing.
-- [x] Add failed job handling.
-
-### Milestone 5: OCR and AI Extraction
-
-- [x] Integrate OCR through Gemini multimodal document input.
-- [x] Extract text from PDF documents and images.
-- [x] Integrate Gemini as the LLM provider.
-- [x] Implement structured invoice extraction.
-- [x] Add Zod schema validation.
-- [x] Handle provider errors and invalid model responses.
-- [x] Persist extraction results.
-
-### Milestone 6: Developer Experience
-
-- [x] Implement API key generation.
-- [x] Implement API key hashing and revocation.
-- [x] Add document processing API.
-- [x] Add job status API.
-- [x] Implement usage metering.
-- [x] Implement webhook endpoints.
-- [x] Add webhook signing and retries.
-
-### Milestone 7: Production Readiness
-
-- [x] Add unit tests.
-- [x] Add integration tests.
-- [x] Add end-to-end tests.
-- [x] Add structured logging.
-- [x] Add OpenTelemetry instrumentation.
-- [x] Create Terraform modules.
-- [x] Configure GitHub Actions.
-- [x] Deploy to AWS (Terraform + ECS deployment/rollback pipeline; requires AWS credentials).
-- [x] Verify health checks and rollback.
-- [x] Document architecture and deployment.
+👉 **[Future Development & Roadmap Guide](docs/future-development.md)**
 
 ---
 
@@ -1666,29 +1597,7 @@ AI providers can differ in pricing, availability, latency, and model capabilitie
 
 ---
 
-## 22. Future Improvements
-
-Potential improvements after the core platform is stable:
-
-- Multiple OCR providers.
-- Document classification.
-- Custom extraction templates.
-- Batch document processing.
-- Human-in-the-loop approval workflows.
-- Multi-page document splitting.
-- Advanced usage-based billing.
-- Organization-level quotas.
-- Custom AI model selection.
-- Document retention policies.
-- Advanced audit trails.
-- Horizontal worker autoscaling.
-- More detailed cost analytics.
-
-These improvements should be prioritized based on actual usage and operational needs.
-
----
-
-## 23. Project Scope
+## 22. Project Scope
 
 DocuFlow AI is intended to demonstrate production-oriented full-stack engineering across:
 
