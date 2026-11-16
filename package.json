@@ -14,7 +14,8 @@
     "test:e2e": "pnpm --filter @docuflow/observability build && pnpm --filter @docuflow/shared build && TSX_TSCONFIG_PATH=tsconfig.e2e.json tsx --test tests/e2e/*.test.ts",
     "db:generate": "pnpm --filter @docuflow/database db:generate",
     "db:migrate": "pnpm --filter @docuflow/database db:migrate",
-    "db:studio": "pnpm --filter @docuflow/database db:studio"
+    "db:studio": "pnpm --filter @docuflow/database db:studio",
+    "db:check": "pnpm --filter @docuflow/database db:check"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

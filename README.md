@@ -1080,7 +1080,7 @@ Compose maps PostgreSQL and Redis to host ports `5432` and `6379` by default. If
 
 ### Run Database Migrations
 
-Export `.env` first (see [Start Applications](#start-applications)) so `DATABASE_URL` is visible to Prisma, then:
+Export `.env` first only if you want to override values for one shell (see [Start Applications](#start-applications)). The `db:*` scripts load the repo-root `.env` automatically, and anything already exported wins:
 
 ```bash
 pnpm db:generate
@@ -1090,17 +1090,16 @@ pnpm db:migrate
 ### Inspect the Database
 
 ```bash
-set -a; source .env; set +a
 pnpm db:studio
 ```
 
-Prisma Studio serves its UI at http://localhost:5555 and reads `DATABASE_URL` from `.env`. The command prints `Prisma Studio is up` even when the database rejects the credentials, so the real error appears in the browser. Check the connection first:
+Prisma Studio serves its UI at http://localhost:5555 and reads `DATABASE_URL` from the repo-root `.env`. The command prints `Prisma Studio is up` even when the database rejects the credentials, so the real error appears in the browser. Check the connection first:
 
 ```bash
-pnpm --filter @docuflow/database exec prisma migrate status
+pnpm db:check
 ```
 
-That command prints the resolved host, port, and database plus whether migrations are applied. If you mapped PostgreSQL to a non-default host port (for example `POSTGRES_PORT=55433` because another project already owns 5432), `DATABASE_URL` must use the same port. If 5555 is already taken, run `pnpm --filter @docuflow/database exec prisma studio --port 5556`.
+That command prints the resolved host, port, and database plus whether migrations are applied. If you mapped PostgreSQL to a non-default host port (for example `POSTGRES_PORT=55433` because another project already owns 5432), `DATABASE_URL` must use the same port. If 5555 is already taken, run `pnpm --filter @docuflow/database exec node scripts/load-root-env.mjs prisma studio --port 5556`.
 
 ### Run Tests and Checks
 
@@ -1212,7 +1211,8 @@ The dashboard is a client-side application that authenticates with the same JWT 
 - **`EADDRINUSE`** — another process owns 3000/4000/4001. Stop it or start the service with a different port.
 - **`Bind for 0.0.0.0:5432 failed: port is already allocated`** — another PostgreSQL (or Redis on 6379) is running on the host. Pick different host ports and point the app at them: `POSTGRES_PORT=55433 REDIS_PORT=56379 docker compose up -d postgres redis`, then set `DATABASE_URL=postgresql://postgres:postgres@localhost:55433/docuflow?schema=public` and `REDIS_URL=redis://localhost:56379` in `.env`.
 - **`503` from `/health/ready`** — read the `checks` object: `database: down` means PostgreSQL is unreachable, `redis: down` means Redis is unreachable. Check `docker compose ps` and the ports in `DATABASE_URL`/`REDIS_URL`.
-- **Prisma Studio shows `Authentication failed` / `P1000` in the browser** — `DATABASE_URL` points at a different PostgreSQL than the DocuFlow container. This usually means another project still listens on 5432 while DocuFlow is published on 55433. Compare `docker compose ps` with the URL in `.env`, then verify with `pnpm --filter @docuflow/database exec prisma migrate status`. The `Prisma Studio is up` line only means the UI started; it does not prove the login succeeded.
+- **`Environment variable not found: DATABASE_URL` in Prisma Studio** — the Prisma CLI only reads `.env` from `packages/database`, while this project keeps one `.env` at the repo root. `pnpm db:studio`, `pnpm db:migrate`, and `pnpm db:generate` load the root file for you; if you call `prisma` directly through `pnpm --filter @docuflow/database exec prisma …`, export `.env` first.
+- **Prisma Studio shows `Authentication failed` / `P1000` in the browser** — `DATABASE_URL` points at a different PostgreSQL than the DocuFlow container. This usually means another project still listens on 5432 while DocuFlow is published on 55433. Compare `docker compose ps` with the URL in `.env`, then verify with `pnpm db:check`. The `Prisma Studio is up` line only means the UI started; it does not prove the login succeeded.
 - **Prisma errors on startup** — run `pnpm db:generate && pnpm db:migrate`.
 - **Uploads return `503 Cloudinary storage is not configured`** — the shell running the API has no Cloudinary variables; export `.env` as shown above.
 - **Edits in `packages/shared` or `packages/observability` do not take effect** — API and worker consume their compiled `dist` output. Rerun `pnpm build:packages` (or restart `pnpm dev`, whose `predev` rebuilds them). Their own tests and the web app do not need this step.
