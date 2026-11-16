@@ -31,7 +31,7 @@ export class AuthTenancyService {
     try {
       const user = await this.prisma.user.create({
         data: { email, passwordHash, name: typeof input.name === "string" ? input.name : null },
-        select: { id: true, email: true },
+        select: { id: true, email: true, name: true },
       });
       return { user, accessToken: this.issueToken(user.id) };
     } catch (error) {
@@ -47,7 +47,7 @@ export class AuthTenancyService {
     if (!user || !(await this.verifyPassword(password, user.passwordHash))) {
       throw new UnauthorizedException("Invalid email or password");
     }
-    return { user: { id: user.id, email: user.email }, accessToken: this.issueToken(user.id) };
+    return { user: { id: user.id, email: user.email, name: user.name }, accessToken: this.issueToken(user.id) };
   }
 
   async authenticate(authorization?: string): Promise<AuthenticatedUser> {

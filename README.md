@@ -47,9 +47,10 @@ Confirm everything is wired up:
 ```bash
 curl -s http://localhost:4000/health/ready
 curl -s http://localhost:4001/health/ready
+curl -s http://localhost:3000/api/health
 ```
 
-Stop with `Ctrl+C`. Full details — per-service commands, port overrides, migration flow, verification script, and troubleshooting — are in [§14 Local Development](#14-local-development).
+Open http://localhost:3000, create an account, and create an organization to reach the dashboard. Stop with `Ctrl+C`. Full details — per-service commands, port overrides, migration flow, verification script, and troubleshooting — are in [§14 Local Development](#14-local-development).
 
 ---
 
@@ -103,7 +104,7 @@ The following features represent the intended product scope. Implementation stat
 | Webhooks          | Notify external systems about job results | Implemented |
 | Observability     | Structured logs, tracing, and readiness probes | Implemented |
 | Infrastructure    | Containerized AWS deployment              | Implemented |
-| Web dashboard     | Upload, review, and usage UI              | Planned |
+| Web dashboard     | Upload, documents, API keys, usage, and webhooks UI | Implemented |
 
 ---
 
@@ -113,11 +114,11 @@ The project uses a TypeScript-first architecture with dedicated services for the
 
 ### Frontend
 
-- **Next.js:** Application framework.
+- **Next.js:** Application framework (App Router, standalone output).
 - **React:** UI development.
 - **TypeScript:** Type safety.
-- **Tailwind CSS:** Styling.
-- **TanStack Query:** Server state management.
+- **Tailwind CSS v4:** Styling.
+- **shadcn/ui + Radix:** Accessible dashboard components built on the `sidebar-03` block.
 
 ### Backend
 
@@ -449,7 +450,7 @@ Tenant isolation must be enforced at the service and database access layers, not
 
 ### Authentication and Authorization
 
-Planned capabilities:
+Implemented capabilities:
 
 - Secure user authentication.
 - Organization membership.
@@ -1062,6 +1063,7 @@ GEMINI_TIMEOUT_MS=60000
 DOCUMENT_SOURCE_BASE_URL=
 
 # Application
+# The web server proxies browser requests from /backend to API_URL.
 WEB_URL=http://localhost:3000
 API_URL=http://localhost:4000
 ```
@@ -1095,7 +1097,7 @@ pnpm lint
 pnpm build
 ```
 
-API and worker tests exercise real HTTP requests against ephemeral local ports. Integration tests use PostgreSQL and Redis; start them with `docker compose up -d postgres redis` before running `pnpm test`. Cloudinary and Gemini are replaced with local HTTP servers, so no external credentials are required. The end-to-end suite boots both applications in-process, uploads through a Cloudinary-compatible mock, processes through the real BullMQ queue, and verifies extraction, usage, tenant isolation, and API-key revocation.
+API and worker tests exercise real HTTP requests against ephemeral local ports. Integration tests use PostgreSQL and Redis; start them with `docker compose up -d postgres redis` before running `pnpm test`. Stop `pnpm dev` first: the dev API, worker, and tests share the same Redis instance and queue state, and running them together can make retry/attempt assertions flaky. Use a separate `DATABASE_URL`/`REDIS_URL` if you need both at once. Cloudinary and Gemini are replaced with local HTTP servers, so no external credentials are required. The end-to-end suite boots both applications in-process, uploads through a Cloudinary-compatible mock, processes through the real BullMQ queue, and verifies extraction, usage, tenant isolation, and API-key revocation.
 
 ### Start Applications
 
@@ -1121,11 +1123,12 @@ pnpm dev
 
 | Service       | URL                                | Notes                              |
 | ------------- | ---------------------------------- | ---------------------------------- |
-| Web           | http://localhost:3000              | Next.js landing page               |
+| Web           | http://localhost:3000              | Dashboard (redirects to `/login`)  |
 | API           | http://localhost:4000              | `PORT` overrides the default       |
 | API liveness  | http://localhost:4000/health       | Always `200` while running         |
 | API readiness | http://localhost:4000/health/ready | `503` until dependencies are up    |
 | Worker        | http://localhost:4001/health       | Readiness at `/health/ready`       |
+| Web health    | http://localhost:3000/api/health   | Liveness used by the ALB           |
 
 A cold start takes roughly 10 seconds before all three services answer.
 
@@ -1177,6 +1180,18 @@ curl -s -X POST http://localhost:4000/api/v1/documents/upload-url \
 
 A `201` with a Cloudinary cloud name and signature means the database, queue, and storage configuration are wired up. Stop the dev server with `Ctrl+C`.
 
+#### Use the dashboard
+
+Open http://localhost:3000. You are redirected to `/login`; create an account (password of at least 12 characters) and then create your first organization. Everything else is scoped to that organization:
+
+1. **Documents** — upload a PDF/JPEG/PNG. The browser asks the API for a signed upload, sends the file straight to Cloudinary, then calls `complete-upload`, which verifies the asset and queues processing. The detail page polls job state and shows the extracted JSON and raw text.
+2. **API keys** — create a key and copy the `df_live_…` secret immediately; it is shown once. Revocation is immediate.
+3. **Usage** — filter metered jobs by date and inspect token counts and processing time.
+4. **Webhooks** — register an HTTPS endpoint for `document.processing.completed` / `.failed` and copy the signing secret. Delivery attempts appear on the endpoint card.
+5. **Settings** — organization ID and slug, member list, add an existing user by email, and create additional organizations.
+
+The dashboard is a client-side application that authenticates with the same JWT as the API. Browser requests go to `/backend/*` on the web origin; the server-side route `apps/web/app/backend/[...path]/route.ts` forwards them to `API_URL` at request time, so no CORS configuration is required and the API host does not have to be baked into the build.
+
 #### Troubleshooting
 
 - **`EADDRINUSE`** — another process owns 3000/4000/4001. Stop it or start the service with a different port.
@@ -1186,6 +1201,10 @@ A `201` with a Cloudinary cloud name and signature means the database, queue, an
 - **Uploads return `503 Cloudinary storage is not configured`** — the shell running the API has no Cloudinary variables; export `.env` as shown above.
 - **Edits in `packages/shared` or `packages/observability` do not take effect** — API and worker consume their compiled `dist` output. Rerun `pnpm build:packages` (or restart `pnpm dev`, whose `predev` rebuilds them). Their own tests and the web app do not need this step.
 - **`.env` edits do not apply** — nothing reloads the file at runtime; restart the dev server after exporting it again.
+- **Dashboard requests fail with 502/503 while the API is healthy** — the web server proxies `/backend` to `API_URL`; check that variable in the shell running `pnpm dev` and open `http://localhost:3000/backend/health/ready`.
+- **Upload fails with `Cloudinary storage is not configured`** — the API process has no Cloudinary variables even though the page loaded. Export `.env` in the terminal that runs `pnpm dev`, not just in a separate shell.
+- **A webhook URL is rejected** — endpoints must be HTTPS and must not resolve to a private, loopback, or reserved address.
+- **Tests fail with duplicate webhook deliveries or attempt counts while `pnpm dev` is running** — stop the dev server first. Tests reuse Redis locally, and a concurrently running worker can claim the same queue state.
 
 ---
 

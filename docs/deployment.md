@@ -123,7 +123,7 @@ The `production` GitHub Environment should require reviewers.
 
 On a successful `CI` run on `main`, or a manual `Deploy` dispatch:
 
-1. Build and push `api`, `worker`, and `web` images tagged with the commit SHA.
+1. Build and push `api`, `worker`, and `web` images tagged with the commit SHA. The web image has no API URL baked in; Terraform sets `API_URL` on the web task so the `/backend` proxy reaches the API at runtime, and the ALB health check uses `/api/health`.
 2. Register a migration task revision with the new API image and run
    `prisma migrate deploy`.
 3. Register new task definitions for each service and update ECS.

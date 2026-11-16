@@ -334,10 +334,10 @@ module "web_service" {
   cpu                = var.web_cpu
   memory             = var.web_memory
   container_port     = 3000
-  environment        = { NODE_ENV = "production", PORT = "3000", NEXT_PUBLIC_API_URL = local.api_public_url }
+  environment        = { NODE_ENV = "production", PORT = "3000", API_URL = local.api_public_url }
   execution_role_arn = aws_iam_role.execution.arn
   target_group_arn   = module.alb.web_target_group_arn
-  health_check_path  = "/"
+  health_check_path  = "/api/health"
   desired_count      = var.web_desired_count
   min_capacity       = 1
   max_capacity       = var.web_max_capacity

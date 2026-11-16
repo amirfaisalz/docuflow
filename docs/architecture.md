@@ -37,7 +37,7 @@ calls, extraction validation, usage metering, and webhook dispatch.
 
 | Component | Responsibility | Source |
 | --- | --- | --- |
-| Web | Next.js shell for the product UI | `apps/web` |
+| Web | Next.js dashboard (login, documents, API keys, usage, webhooks) plus a `/backend` API proxy | `apps/web` |
 | API | Auth, tenancy, uploads, jobs, API keys, usage, webhook management, health | `apps/api` |
 | Worker | Document processing, usage persistence, webhook delivery | `apps/worker` |
 | Database | Relational source of truth and transactional state changes | `packages/database` |
